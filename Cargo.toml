@@ -1,5 +1,5 @@
 [package]
-name = "img-rec-pi"
+name = "tiny-object-detection"
 authors = ["littletitan"]
 version = "0.0.0" # not production yet
 edition = "2018"
