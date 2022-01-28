@@ -1,6 +1,5 @@
 # Tiny Object Detection
-
-<!-- TODO -->
+pi edition.
 
 # License
-TODO
+[Apache 2.0](LICENSE.md)
