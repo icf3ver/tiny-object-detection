@@ -1,0 +1,18 @@
+[package]
+name = "img-rec-pi"
+authors = ["littletitan"]
+version = "0.0.0" # not production yet
+edition = "2018"
+
+[dependencies]
+
+vulkano = "0.20.0"
+vulkano-shaders = "0.20.0"
+
+image = "0.23.12"
+
+tokio = {version = "1.15.0", features = ["full"]}
+
+eye-hal = "0.1.0"
+
+edgetpu = { git = "https://github.com/ionosnetworks/edgetpu-rs" } # fork is work in progress
