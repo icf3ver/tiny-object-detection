@@ -1,7 +1,7 @@
 #!/bin/bash
 
 ## Install dependancies:
-##  + TODO libedgetpu
+##  + libedgetpu
 ##  + Vulakan
 ##
 ## TODO size estimate
@@ -16,9 +16,14 @@ fi
 echo "Updating packages..."; apt-get update
 echo "Upgrading packages..."; apt-get upgrade
 
-# fetch and build libedgetpu 
-#TODO fetch libedgetpu.1.so 
-#TODO fetch edgetpu.h
+# fetch and build libedgetpu
+echo "Installing edgetpu library and header files ..."
+git clone https://coral.googlesource.com/edgetpu
+cd edgetpu
+git checkout release-chef
+cp libedgetpu/libedgetpu_arm64_throttled.so /usr/lib/*-linux-gnu/libedgetpu.so >> /dev/null
+cp libedgetpu/edgetpu.h /usr/include/edgetpu.h >> /dev/null
+cd ..
 
 # install vulkan dependencies
 echo "Installing Vulkan Packages ..."
