@@ -17,3 +17,5 @@ eye-hal = "0.1.0"
 
 #edgetpu = { git = "https://github.com/ionosnetworks/edgetpu-rs", rev = "56961f2" }
 edgetpu = { git = "https://github.com/littletitan/edgetpu-rs", rev = "23311e0" }
+
+bytes = "*"

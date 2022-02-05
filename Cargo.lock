@@ -1005,6 +1005,7 @@ dependencies = [
 name = "tiny-object-detection"
 version = "0.0.0"
 dependencies = [
+ "bytes",
  "edgetpu",
  "eye-hal",
  "image",

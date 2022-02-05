@@ -1,16 +1,20 @@
 use std::sync::Arc;
+use edgetpu::tflite::FlatBufferModel;
 use eye_hal::PlatformContext;
 use eye_hal::traits::{Context, Device as eyeDevice, Stream};
 use image::imageops::FilterType;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::{time::Instant, sync::Mutex, net::TcpListener, io::{AsyncReadExt, AsyncWriteExt}, join};
+use vulkano::Version;
+use vulkano::image::ImageViewAbstract;
+use vulkano::sampler::{Sampler, SamplerAddressMode, Filter};
 use vulkano::{
     instance::{
         Instance,
         InstanceExtensions,
-        PhysicalDevice
     },
     device::{
+        physical::PhysicalDevice,
         Device,
         DeviceExtensions,
         Features
@@ -21,31 +25,43 @@ use vulkano::{
     },
     image::{
         StorageImage,
-        Dimensions
+        ImageDimensions
     },
     format::{
         Format,
     },
-    descriptor::{
-        descriptor_set::PersistentDescriptorSet,
-        PipelineLayoutAbstract
+    descriptor_set::{
+        PersistentDescriptorSet
     },
     command_buffer::{
         AutoCommandBufferBuilder,
-        CommandBuffer
+        PrimaryCommandBuffer
     },
     pipeline::ComputePipeline,
     sync::GpuFuture
 };
+use vulkano::pipeline::{Pipeline, PipelineBindPoint};
 
 use image::{
     ImageBuffer,
-    Rgba, LumaA, GenericImageView
+    Rgba, LumaA, GenericImageView, ImageFormat
 };
+
+
+use bytes::Bytes;
+use edgetpu::EdgeTpuContext;
+use edgetpu::tflite;
+use edgetpu::tflite::op_resolver::OpResolver;
+use edgetpu::tflite::ops::builtin::BuiltinOpResolver;
+use edgetpu::tflite::InterpreterBuilder;
 
 
 const MAP_PX_DROP: u32 = 8; // one pixel every 1024 with nearest neighbor in a ___ by ___ image
 
+// TODO calibrate
+const Y_CAM: f32 = 0.0;
+const BASELINE: f32 = 0.0;
+const CALIBRATION_COEFFICIENT: u32 = 0;
 
 #[derive(PartialEq)]
 enum TargetClass {
@@ -55,12 +71,12 @@ enum TargetClass {
 
 struct Target {
     class: TargetClass,
-    pos: (f64, f64, f64)
+    pos: (f32, f32, f32)
 }
 
 struct TargetBuilder {
     class: TargetClass,
-    pos: (f64, f64),
+    pos: (f32, f32),
 }
 
 impl PartialEq for Target {
@@ -86,7 +102,7 @@ struct Path {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let img_disparity_queue: Arc<Mutex<Vec<(Vec<u8>, u32)>>> = Arc::new(Mutex::new(Vec::new()));
+    let img_disparity_queue: Arc<Mutex<Vec<(Vec<u8>, Vec<u8>)>>> = Arc::new(Mutex::new(Vec::new()));
     let (not_empty_tx, mut not_empty_rx) = mpsc::channel(1);
     let target_queue: Arc<Mutex<Vec<Target>>> = Arc::new(Mutex::new(Vec::new()));
     let scene: Arc<Mutex<Scene>> = Arc::new(Mutex::new(Scene{map: Vec::new()}));
@@ -110,15 +126,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-async fn process_scene((img_disparity_queue, not_empty): (Arc<Mutex<Vec<(Vec<u8>, u32)>>>, Sender<()>), target_queue: Arc<Mutex<Vec<Target>>>) {
-    // Turns out knowing depth will allow us to cheat a bit on this step. 
-    // We will be able to use YOLO and not YOLACT for this stage. Know that
-    // the efficiency of this approach is completely dependant
-    async fn image_recognition (_frame_buffer: Vec<u8>) -> Vec<TargetBuilder> {
-        // Because I have enough to do as is I will use an unoptimized YOLO library
-        let im = read_bmp(manifest_dir().join("data/resized_cat.bmp")).expect("faild to load image");
+async fn process_scene((img_disparity_queue, not_empty): (Arc<Mutex<Vec<(Vec<u8>, Vec<u8>)>>>, Sender<()>), target_queue: Arc<Mutex<Vec<Target>>>) {
+    async fn image_recognition (_frame_buffer: Vec<u8>) -> Result<Vec<TargetBuilder>, ()> {
+        let img;
         let model = FlatBufferModel::build_from_file(
-            manifest_dir().join("data/mobilenet_v1_1.0_224_quant_edgetpu.tflite"),
+            manifest_dir().join("data/todo.tflite"),
         ).expect("failed to load model");
     
         let edgetpu_context = EdgeTpuContext::open_device().expect("failed to open coral device");
@@ -137,64 +149,40 @@ async fn process_scene((img_disparity_queue, not_empty): (Arc<Mutex<Vec<(Vec<u8>
     
         let tensor_index = interpreter.inputs()[0];
         let required_shape = interpreter.tensor_info(tensor_index).unwrap().dims;
-        if im.height != required_shape[1]
-            || im.width != required_shape[2]
-            || im.channels != required_shape[3]
-        {
+        if img.height != required_shape[1] 
+                || img.width != required_shape[2] 
+                || img.channels != required_shape[3] {
             eprintln!("Input size mismatches:");
-            eprintln!("\twidth: {} vs {}", im.width, required_shape[0]);
-            eprintln!("\theight: {} vs {}", im.height, required_shape[1]);
-            eprintln!("\tchannels: {} vs {}", im.channels, required_shape[2]);
-            return;
+            eprintln!("\twidth: {} vs {}", img.width, required_shape[0]);
+            eprintln!("\theight: {} vs {}", img.height, required_shape[1]);
+            eprintln!("\tchannels: {} vs {}", img.channels, required_shape[2]);
+            return Err(());
         }
-    
-        let inf_start = Instant::now();
-        interpreter.tensor_data_mut(tensor_index).unwrap().copy_from_slice(im.data.as_ref());
-        interpreter.invoke().expect("invoke failed");
-        let outputs = interpreter.outputs();
-        let mut results = Vec::new();
-        for &output in outputs {
-            let tensor_info = interpreter.tensor_info(output).expect("must data");
-            match tensor_info.element_kind {
-                tflite::context::ElementKind::kTfLiteUInt8 => {
-                    let out_tensor: &[u8] = interpreter.tensor_data(output).expect("must data");
-                    let scale = tensor_info.params.scale;
-                    let zero_point = tensor_info.params.zero_point;
-                    results = out_tensor.into_iter()
-                        .map(|&x| scale * (((x as i32) - zero_point) as f32)).collect();
-                }
-                tflite::context::ElementKind::kTfLiteFloat32 => {
-                    let out_tensor: &[f32] = interpreter.tensor_data(output).expect("must data");
-                    results = out_tensor.into_iter().copied().collect();
-                }
-                _ => eprintln!(
-                    "Tensor {} has unsupported output type {:?}.",
-                    tensor_info.name, tensor_info.element_kind,
-                ),
-            }
-        }
-        let time_taken = inf_start.elapsed();
-        let max = results
-            .into_iter()
-            .enumerate()
-            .fold((0, -1.0), |acc, x| match x.1 > acc.1 {
-                true => x,
-                false => acc,
-            });
-        println!(
-            "[Image analysis] max value index: {} value: {}",
-            max.0, max.1
-        );
-        println!("Took {}ms", time_taken.as_millis());
+
+        // todo!();
+
+        Ok(Vec::new())
     }
 
     fn find_pairs(_targets1: Vec<TargetBuilder>, _targets2: Vec<TargetBuilder>) -> Vec<(TargetBuilder, TargetBuilder)> {
         Vec::new()
     }
 
-    fn calculate_disparity(targets1: Vec<TargetBuilder>, targets2: Vec<TargetBuilder>) -> (u32, Vec<Target>) {
-        let _pair = find_pairs(targets1, targets2);
-        (0, Vec::new())
+    fn calculate_disparity(targets1: Vec<TargetBuilder>, targets2: Vec<TargetBuilder>) -> Vec<Target> {
+        let pair = find_pairs(targets1, targets2);
+        let targets = Vec::new();
+        for (tb_left, tb_right) in pair {
+            let pos = (
+                BASELINE * (tb_left.pos.0 + tb_right.pos.0) / (2.0 * (tb_left.pos.0 - tb_right.pos.0)), 
+                BASELINE * Y_CAM / (tb_left.pos.0 - tb_right.pos.0), 
+                BASELINE * CALIBRATION_COEFFICIENT as f32 / (tb_left.pos.0 - tb_right.pos.0)
+            );
+            targets.push(Target{
+                class: tb_left.class,
+                pos
+            });
+        }
+        targets
     }
 
     let ctx = PlatformContext::default();
@@ -225,14 +213,16 @@ async fn process_scene((img_disparity_queue, not_empty): (Arc<Mutex<Vec<(Vec<u8>
             .into_bytes().collect();
     
         // image recognition
-        let (targets_2d1, targets_2d2) = join!(image_recognition(camera1_frame.clone()), image_recognition(camera2_frame));
+        let (Ok(targets_2d1), Ok(targets_2d2)) = join!(
+            image_recognition(camera1_frame.clone()), 
+            image_recognition(camera2_frame.clone()));
         
         // disparity
-        let (disparity, mut targets) = calculate_disparity(targets_2d1, targets_2d2);
+        let mut targets = calculate_disparity(targets_2d1, targets_2d2);
     
         // append target and img and disparity
         let (mut target_queue_lock, mut img_disparity_queue_lock) = join!(target_queue.lock(), img_disparity_queue.lock());
-        img_disparity_queue_lock.push((camera1_frame, disparity));
+        img_disparity_queue_lock.push((camera1_frame, camera2_frame));
         target_queue_lock.append(&mut targets);
 
         not_empty.send(()).await.unwrap_or(());
@@ -240,9 +230,17 @@ async fn process_scene((img_disparity_queue, not_empty): (Arc<Mutex<Vec<(Vec<u8>
     }
 }
 
-async fn append_scene((img_disparity_queue, not_empty): (Arc<Mutex<Vec<(Vec<u8>, u32)>>>, &mut Receiver<()>), scene: Arc<Mutex<Scene>>) {
+async fn append_scene((img_disparity_queue, not_empty): (Arc<Mutex<Vec<(Vec<u8>, Vec<u8>)>>>, &mut Receiver<()>), scene: Arc<Mutex<Scene>>) {
+    // I don't intend to recreate instance and structure every frame.
+    // In a few commits when vk is functioning I will bring these to
+    // main(). For now I want to keep this structure contained.
+    
+    // TODOs
+    //  + Get new vko working
+
     let instance = Instance::new(
         None,
+        Version::default(),
         &InstanceExtensions::none(),
         None
     ).expect("failed to create instance");
@@ -268,39 +266,86 @@ async fn append_scene((img_disparity_queue, not_empty): (Arc<Mutex<Vec<(Vec<u8>,
 
     let image = StorageImage::new(
         device.clone(),
-        Dimensions::Dim2d {
+        ImageDimensions::Dim2d {
             width: 1024,
-            height: 1024
+            height: 1024,
+            array_layers: todo!(),
         },
         Format::R8G8B8A8Unorm,
         Some(queue.family())
     ).unwrap();
 
+    let sampler_img1 = Sampler::new(
+        device.clone(),
+        Filter::Nearest,
+        Filter::Nearest,
+        vulkano::sampler::MipmapMode::Nearest,
+        SamplerAddressMode::ClampToEdge,
+        SamplerAddressMode::ClampToEdge,
+        SamplerAddressMode::ClampToEdge,
+        0.0,
+        1.0,
+        0.0,
+        0.0
+    ).unwrap();
+    let sampler_img2 = Sampler::new(
+        device.clone(),
+        Filter::Nearest,
+        Filter::Nearest,
+        vulkano::sampler::MipmapMode::Nearest,
+        SamplerAddressMode::ClampToEdge,
+        SamplerAddressMode::ClampToEdge,
+        SamplerAddressMode::ClampToEdge,
+        0.0,
+        1.0,
+        0.0,
+        0.0
+    ).unwrap();
+
     mod cs {
         vulkano_shaders::shader!{
             ty: "compute",
-            path: "./src/shader.glsl"
+            path: "src/shader.glsl"
         }
     }
 
     let fractal_shader = cs::Shader::load(device.clone()).expect("failed to create fractal shader");
 
-    let compute_pipeline = Arc::new(
-        ComputePipeline::new(
+    let compute_pipeline = ComputePipeline::new(
             device.clone(),
             &fractal_shader.main_entry_point(),
             &(),
             None,
-        ).unwrap()
-    );
+            |_| {}
+        ).unwrap();
 
-    let layout = compute_pipeline.layout().descriptor_set_layout(0).unwrap();
+    let layout = compute_pipeline.layout().descriptor_set_layouts().get(0).unwrap();
 
-    let set = Arc::new(
-        PersistentDescriptorSet::start(layout.clone())
-            .add_image(image.clone()).unwrap()
-            .build().unwrap()
-    );
+    let (img_camera1_raw, img_camera2_raw) = img_disparity_queue.lock().await.pop().unwrap();
+
+    let (image_camera1, gpufuture_camera1) = ImmutableImage::from_iter(
+            img_camera1_raw.iter().cloned(),
+            dimensions,
+            MipmapsCount::One,
+            Format::R8G8B8A8Srgb,
+            queue.clone(),
+        ).unwrap();
+    let (image_camera2, gpufuture_camera2) = ImmutableImage::from_iter(
+            img_camera2_raw.iter().cloned(),
+            dimensions,
+            MipmapsCount::One,
+            Format::R8G8B8A8Srgb,
+            queue.clone(),
+        ).unwrap();
+
+    let imgview_camera1 = ImageView::new(img_camera1).unwrap();
+    let imgview_camera2 = ImageView::new(img_camera2).unwrap();
+
+    let set = PersistentDescriptorSet::start(layout.clone())
+        .add_sampled_image(imageview_camera1, sampler_img1).unwrap()
+        .add_sampled_image(imageview_camera2, sampler_img2).unwrap()
+        .add_image(image.clone()).unwrap()
+        .build().unwrap();
 
     let dest = CpuAccessibleBuffer::from_iter(
         device.clone(), 
@@ -309,30 +354,32 @@ async fn append_scene((img_disparity_queue, not_empty): (Arc<Mutex<Vec<(Vec<u8>,
         (0 .. 1024 * 1024 * 4).map(|_| 0u8)
     ).expect("failed to create buffer");
 
-    let mut builder = AutoCommandBufferBuilder::new(
+    let mut builder = AutoCommandBufferBuilder::primary(
         device.clone(),
-        queue.family()
+        queue.family(),
+        CommandBufferUsage::MultipleSubmit,
     ).unwrap();
 
     // wait for there to be something to pop
     if img_disparity_queue.lock().await.len() == 0 { not_empty.recv().await; }
 
-    let (img, disparity) = img_disparity_queue.lock().await.pop().unwrap();
     builder
-        .dispatch(
-            [1024 / 8, 1024 / 8, 1],
-            compute_pipeline.clone(), 
-            set.clone(), 
-            ()
-        ).unwrap()
+        .bind_pipeline_compute(compute_pipeline.clone())
+        .bind_descriptor_sets(
+            PipelineBindPoint::Compute,
+            compute_pipeline.layout().clone(),
+            0,
+            set.clone()
+        )
+        .dispatch([1024 / 8, 1024 / 8, 1]).unwrap()
         .copy_image_to_buffer(
             image.clone(),
             dest.clone()
         ).unwrap();
     let command_buffer = builder.build().unwrap();
 
-    let finished = command_buffer.execute(queue.clone()).unwrap();
-    finished.then_signal_fence_and_flush().unwrap()
+    command_buffer.execute(queue.clone()).unwrap()
+        .then_signal_fence_and_flush().unwrap()
         .wait(None).unwrap();
 
     let buffer_content = dest.read().unwrap();
@@ -386,6 +433,7 @@ async fn handle_path_request(path: Arc<Mutex<Path>>) -> Result<(), Box<dyn std::
                                 directions: Vec::new(),
                             }
                         };
+                        socket.write(b"OK").await;
                     },
                     b"GetPath" => {
                         let path_lock = path.lock().await;
