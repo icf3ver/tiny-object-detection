@@ -1,6 +1,10 @@
+use std::io::Cursor;
 use std::sync::Arc;
 use edgetpu::tflite::FlatBufferModel;
+use vulkano::command_buffer::CommandBufferUsage;
+use vulkano::image::{ImmutableImage, MipmapsCount};
 use eye_hal::PlatformContext;
+use vulkano::image::view::ImageView;
 use eye_hal::traits::{Context, Device as eyeDevice, Stream};
 use image::imageops::FilterType;
 use tokio::sync::mpsc::{self, Receiver, Sender};
@@ -47,6 +51,7 @@ use image::{
     Rgba, LumaA, GenericImageView, ImageFormat
 };
 
+use image::io::Reader as ImageReader;
 
 use bytes::Bytes;
 use edgetpu::EdgeTpuContext;
@@ -126,11 +131,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
+struct Image {
+    width: usize,
+    height: usize,
+    channels: usize,
+    data: Bytes,
+}
+
 async fn process_scene((img_disparity_queue, not_empty): (Arc<Mutex<Vec<(Vec<u8>, Vec<u8>)>>>, Sender<()>), target_queue: Arc<Mutex<Vec<Target>>>) {
-    async fn image_recognition (_frame_buffer: Vec<u8>) -> Result<Vec<TargetBuilder>, ()> {
-        let img;
+    async fn image_recognition (frame_buffer: Vec<u8>) -> Result<Vec<TargetBuilder>, ()> {
+        let img = Image{
+            width: 1024,
+            height: 1024,
+            channels: 3,
+            data: Bytes::from(frame_buffer)
+        };
         let model = FlatBufferModel::build_from_file(
-            manifest_dir().join("data/todo.tflite"),
+            "data/todo.tflite",
         ).expect("failed to load model");
     
         let edgetpu_context = EdgeTpuContext::open_device().expect("failed to open coral device");
@@ -150,7 +167,7 @@ async fn process_scene((img_disparity_queue, not_empty): (Arc<Mutex<Vec<(Vec<u8>
         let tensor_index = interpreter.inputs()[0];
         let required_shape = interpreter.tensor_info(tensor_index).unwrap().dims;
         if img.height != required_shape[1] 
-                || img.width != required_shape[2] 
+                || img.width != required_shape[2]
                 || img.channels != required_shape[3] {
             eprintln!("Input size mismatches:");
             eprintln!("\twidth: {} vs {}", img.width, required_shape[0]);
@@ -232,222 +249,4 @@ async fn process_scene((img_disparity_queue, not_empty): (Arc<Mutex<Vec<(Vec<u8>
 
 async fn append_scene((img_disparity_queue, not_empty): (Arc<Mutex<Vec<(Vec<u8>, Vec<u8>)>>>, &mut Receiver<()>), scene: Arc<Mutex<Scene>>) {
     // I don't intend to recreate instance and structure every frame.
-    // In a few commits when vk is functioning I will bring these to
-    // main(). For now I want to keep this structure contained.
-    
-    // TODOs
-    //  + Get new vko working
-
-    let instance = Instance::new(
-        None,
-        Version::default(),
-        &InstanceExtensions::none(),
-        None
-    ).expect("failed to create instance");
-
-    let physical = PhysicalDevice::enumerate(&instance).next().unwrap();
-    
-    let queue_family = physical.queue_families()
-        .find(|&q| q.supports_compute()).unwrap();
-    
-    let device_ext = DeviceExtensions{
-        khr_storage_buffer_storage_class: true,
-        ..DeviceExtensions::none()
-    };
-
-    let (device, mut queues) = Device::new(
-        physical.clone(),
-        &Features::none(),
-        &device_ext,
-        [(queue_family, 0.5)].iter().cloned()
-    ).unwrap();
-
-    let queue = queues.next().unwrap();
-
-    let image = StorageImage::new(
-        device.clone(),
-        ImageDimensions::Dim2d {
-            width: 1024,
-            height: 1024,
-            array_layers: todo!(),
-        },
-        Format::R8G8B8A8Unorm,
-        Some(queue.family())
-    ).unwrap();
-
-    let sampler_img1 = Sampler::new(
-        device.clone(),
-        Filter::Nearest,
-        Filter::Nearest,
-        vulkano::sampler::MipmapMode::Nearest,
-        SamplerAddressMode::ClampToEdge,
-        SamplerAddressMode::ClampToEdge,
-        SamplerAddressMode::ClampToEdge,
-        0.0,
-        1.0,
-        0.0,
-        0.0
-    ).unwrap();
-    let sampler_img2 = Sampler::new(
-        device.clone(),
-        Filter::Nearest,
-        Filter::Nearest,
-        vulkano::sampler::MipmapMode::Nearest,
-        SamplerAddressMode::ClampToEdge,
-        SamplerAddressMode::ClampToEdge,
-        SamplerAddressMode::ClampToEdge,
-        0.0,
-        1.0,
-        0.0,
-        0.0
-    ).unwrap();
-
-    mod cs {
-        vulkano_shaders::shader!{
-            ty: "compute",
-            path: "src/shader.glsl"
-        }
-    }
-
-    let fractal_shader = cs::Shader::load(device.clone()).expect("failed to create fractal shader");
-
-    let compute_pipeline = ComputePipeline::new(
-            device.clone(),
-            &fractal_shader.main_entry_point(),
-            &(),
-            None,
-            |_| {}
-        ).unwrap();
-
-    let layout = compute_pipeline.layout().descriptor_set_layouts().get(0).unwrap();
-
-    let (img_camera1_raw, img_camera2_raw) = img_disparity_queue.lock().await.pop().unwrap();
-
-    let (image_camera1, gpufuture_camera1) = ImmutableImage::from_iter(
-            img_camera1_raw.iter().cloned(),
-            dimensions,
-            MipmapsCount::One,
-            Format::R8G8B8A8Srgb,
-            queue.clone(),
-        ).unwrap();
-    let (image_camera2, gpufuture_camera2) = ImmutableImage::from_iter(
-            img_camera2_raw.iter().cloned(),
-            dimensions,
-            MipmapsCount::One,
-            Format::R8G8B8A8Srgb,
-            queue.clone(),
-        ).unwrap();
-
-    let imgview_camera1 = ImageView::new(img_camera1).unwrap();
-    let imgview_camera2 = ImageView::new(img_camera2).unwrap();
-
-    let set = PersistentDescriptorSet::start(layout.clone())
-        .add_sampled_image(imageview_camera1, sampler_img1).unwrap()
-        .add_sampled_image(imageview_camera2, sampler_img2).unwrap()
-        .add_image(image.clone()).unwrap()
-        .build().unwrap();
-
-    let dest = CpuAccessibleBuffer::from_iter(
-        device.clone(), 
-        BufferUsage::all(), 
-        false,
-        (0 .. 1024 * 1024 * 4).map(|_| 0u8)
-    ).expect("failed to create buffer");
-
-    let mut builder = AutoCommandBufferBuilder::primary(
-        device.clone(),
-        queue.family(),
-        CommandBufferUsage::MultipleSubmit,
-    ).unwrap();
-
-    // wait for there to be something to pop
-    if img_disparity_queue.lock().await.len() == 0 { not_empty.recv().await; }
-
-    builder
-        .bind_pipeline_compute(compute_pipeline.clone())
-        .bind_descriptor_sets(
-            PipelineBindPoint::Compute,
-            compute_pipeline.layout().clone(),
-            0,
-            set.clone()
-        )
-        .dispatch([1024 / 8, 1024 / 8, 1]).unwrap()
-        .copy_image_to_buffer(
-            image.clone(),
-            dest.clone()
-        ).unwrap();
-    let command_buffer = builder.build().unwrap();
-
-    command_buffer.execute(queue.clone()).unwrap()
-        .then_signal_fence_and_flush().unwrap()
-        .wait(None).unwrap();
-
-    let buffer_content = dest.read().unwrap();
-    let scene_image = ImageBuffer::<Rgba<u8>, _>::from_raw(1024, 1024, &buffer_content[..]).unwrap();
-    let filtered_scene_image = image::imageops::resize(&scene_image, 1024/MAP_PX_DROP, 1024/MAP_PX_DROP, FilterType::Nearest);
-
-    #[inline]
-    fn decode(px: [u8; 4]) -> (f32, f32, f32){
-        // 4 bytes = 32 bits = 10.66 bits per dimension = 1024 values per dimension but if we agree to 1/z being stored we get a lot more accuracy from the points that matter
-        (0.0, 0.0, 0.0)
-    }
-    // Pretransformed to position via giro input
-    let new_scene_data = filtered_scene_image.pixels().map(|px| decode(px.0));
-
-    let mut scene_lock = scene.lock().await;
-    scene_lock.integrate(new_scene_data);
-}
-
-async fn modify_path(path: Arc<Mutex<Path>>, target_queue: Arc<Mutex<Vec<Target>>>, scene: Arc<Mutex<Scene>>) {
-    todo!();
-}
-
-async fn handle_path_request(path: Arc<Mutex<Path>>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let listener = TcpListener::bind("127.0.0.1:8080").await?;
-
-    loop {
-        let (mut socket, _) = listener.accept().await?;
-
-        let path = path.clone();
-        tokio::spawn(async move {
-            let mut buf = [0; 7];
-            loop {
-                match socket.read(&mut buf).await {
-                    // socket closed
-                    Ok(n) if n == 0 => return,
-                    Ok(n) => n,
-                    Err(e) => {
-                        eprintln!("failed to read from socket; err = {:?}", e);
-                        return;
-                    }
-                };
-                let path = path.clone();
-                match &buf {
-                    b"NewPath" => {
-                        let mut lock = path.lock().await;
-                        *lock = {
-                            let created = Instant::now();
-                            Path {
-                                created,
-                                modified: created,
-                                directions: Vec::new(),
-                            }
-                        };
-                        socket.write(b"OK").await;
-                    },
-                    b"GetPath" => {
-                        let path_lock = path.lock().await;
-                        if let Err(e) = socket.write_all(&path_lock.directions[..]).await {
-                            eprintln!("failed to write to socket; err = {:?}", e);
-                            return;
-                        }
-                    },
-                    request => {
-                        eprintln!("formatting err {:?} is not a request", std::str::from_utf8(request));
-                        return;
-                    }
-                }
-            }
-        });
-    }
-}
+    // In a few commits when
