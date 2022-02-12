@@ -19,3 +19,8 @@ eye-hal = "0.1.0"
 edgetpu = { git = "https://github.com/littletitan/edgetpu-rs", rev = "23311e0" }
 
 bytes = "*"
+
+openni2 = "*"
+
+[profile.dev]
+opt-level = 1

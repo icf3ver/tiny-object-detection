@@ -873,6 +873,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da32515d9f6e6e489d7bc9d84c71b060db7247dc035bbe44eac88cf87486d8d5"
 
 [[package]]
+name = "openni2"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bcc48a58468d8021d31e4c40de9635d90ffd07d51ae4ea252f75df14b476b1c1"
+dependencies = [
+ "openni2-sys",
+]
+
+[[package]]
+name = "openni2-sys"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "40564aea667e36410c592a5e2cdf07b8b9c9cf48adeb53e4a96de32afaeb518c"
+
+[[package]]
 name = "parking_lot"
 version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1229,6 +1244,7 @@ dependencies = [
  "edgetpu",
  "eye-hal",
  "image",
+ "openni2",
  "tokio",
  "vulkano",
  "vulkano-shaders",
