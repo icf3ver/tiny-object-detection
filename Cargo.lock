@@ -69,30 +69,7 @@ dependencies = [
  "cfg-if 0.1.10",
  "clang-sys",
  "clap",
- "env_logger 0.7.1",
- "lazy_static",
- "lazycell",
- "log",
- "peeking_take_while",
- "proc-macro2",
- "quote",
- "regex",
- "rustc-hash",
- "shlex",
- "which",
-]
-
-[[package]]
-name = "bindgen"
-version = "0.56.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2da379dbebc0b76ef63ca68d8fc6e71c0f13e59432e0987e508c1820e6ab5239"
-dependencies = [
- "bitflags",
- "cexpr",
- "clang-sys",
- "clap",
- "env_logger 0.8.4",
+ "env_logger",
  "lazy_static",
  "lazycell",
  "log",
@@ -430,20 +407,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "44533bbbb3bb3c1fa17d9f2e4e38bbbaf8396ba82193c4cb1b6445d711445d36"
 dependencies = [
  "atty",
- "humantime 1.3.0",
- "log",
- "regex",
- "termcolor",
-]
-
-[[package]]
-name = "env_logger"
-version = "0.8.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a19187fea3ac7e84da7dacf48de0c45d63c6a76f9490dae389aead16c243fce3"
-dependencies = [
- "atty",
- "humantime 2.1.0",
+ "humantime",
  "log",
  "regex",
  "termcolor",
@@ -463,16 +427,6 @@ dependencies = [
  "lebe",
  "smallvec",
  "threadpool",
-]
-
-[[package]]
-name = "eye-hal"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ba8ed220d354b5ece0e1301020ec704531d9cb11f48c5643d62ab08c4867a2b"
-dependencies = [
- "bitflags",
- "v4l",
 ]
 
 [[package]]
@@ -591,12 +545,6 @@ checksum = "df004cfca50ef23c36850aaaa59ad52cc70d0e90243c3c7737a4dd32dc7a3c4f"
 dependencies = [
  "quick-error",
 ]
-
-[[package]]
-name = "humantime"
-version = "2.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a3a5bfb195931eeb336b2a7b4d761daec841b97f947d34394601737a7bba5e4"
 
 [[package]]
 name = "if_rust_version"
@@ -878,7 +826,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bcc48a58468d8021d31e4c40de9635d90ffd07d51ae4ea252f75df14b476b1c1"
 dependencies = [
- "openni2-sys",
+ "openni2-sys 1.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -886,6 +834,11 @@ name = "openni2-sys"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40564aea667e36410c592a5e2cdf07b8b9c9cf48adeb53e4a96de32afaeb518c"
+
+[[package]]
+name = "openni2-sys"
+version = "1.1.1"
+source = "git+https://github.com/TooManyBees/openni2-sys#b06a02d5405096cbe317abb88b599838afbc591c"
 
 [[package]]
 name = "parking_lot"
@@ -1187,7 +1140,7 @@ name = "tflite"
 version = "0.9.0"
 source = "git+https://github.com/littletitan/tflite-rs#abcaeab4ca634369cab22ca05c07a1fc8f5f26a4"
 dependencies = [
- "bindgen 0.55.1",
+ "bindgen",
  "cpp",
  "cpp_build",
  "fs_extra",
@@ -1242,9 +1195,9 @@ version = "0.0.0"
 dependencies = [
  "bytes",
  "edgetpu",
- "eye-hal",
  "image",
  "openni2",
+ "openni2-sys 1.1.1 (git+https://github.com/TooManyBees/openni2-sys)",
  "tokio",
  "vulkano",
  "vulkano-shaders",
@@ -1297,26 +1250,6 @@ name = "unicode-xid"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ccb82d61f80a663efe1f787a51b16b5a51e3314d6ac365b08639f52387b33f3"
-
-[[package]]
-name = "v4l"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f6eca58bca86b4b353b55e18828694f91e83dd7e9c4d7f127515e4687d5a8e9"
-dependencies = [
- "bitflags",
- "libc",
- "v4l2-sys-mit",
-]
-
-[[package]]
-name = "v4l2-sys-mit"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0c932c06df4af1dfb229f604214f2a87993784596ff33ffdadcba1b5519254e"
-dependencies = [
- "bindgen 0.56.0",
-]
 
 [[package]]
 name = "vec_map"

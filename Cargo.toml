@@ -13,7 +13,7 @@ image = "0.24.0"
 
 tokio = {version = "1.15.0", features = ["full"]}
 
-eye-hal = "0.1.0"
+# eye-hal = "0.1.0"
 
 #edgetpu = { git = "https://github.com/ionosnetworks/edgetpu-rs", rev = "56961f2" }
 edgetpu = { git = "https://github.com/littletitan/edgetpu-rs", rev = "23311e0" }
@@ -21,6 +21,7 @@ edgetpu = { git = "https://github.com/littletitan/edgetpu-rs", rev = "23311e0" }
 bytes = "*"
 
 openni2 = "*"
+openni2-sys = { git="https://github.com/TooManyBees/openni2-sys" }
 
 [profile.dev]
 opt-level = 1
