@@ -17,7 +17,4 @@ jobs:
     - name: Dependencies
       run: sudo apt install git; sudo sh ./dependencies.sh
     - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
-
+      run: export OPENNI2_REDIST "/lib/libOpenNI2"; export OPENNI2_REDIST64 "/lib/libOpenNI2"; cargo build --verbose
