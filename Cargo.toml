@@ -1,27 +1,30 @@
 [package]
 name = "tiny-object-detection"
+description = "Doing my part to Modernize team UV"
 authors = ["littletitan"]
 version = "0.0.0" # not production yet
 edition = "2018"
 
 [dependencies]
 
+# Utils
+image = "0.24.0"
+bytes = "*"
+
+# Vk
 vulkano = "0.27.1"
 vulkano-shaders = "0.27.1"
 
-image = "0.24.0"
-
+# Async
 tokio = {version = "1.15.0", features = ["full"]}
 
-# eye-hal = "0.1.0"
-
+# Tf and coral tpu libs
 #edgetpu = { git = "https://github.com/ionosnetworks/edgetpu-rs", rev = "56961f2" }
 edgetpu = { git = "https://github.com/littletitan/edgetpu-rs", rev = "23311e0" }
 
-bytes = "*"
 
-openni2 = "*"
+# Cameras
+# eye-hal = "0.1.0" # for pi 15-pin connector cameras
+openni2 = "*" # For the PrimeSense camera
 openni2-sys = { git="https://github.com/TooManyBees/openni2-sys" }
 
-[profile.dev]
-opt-level = 1
