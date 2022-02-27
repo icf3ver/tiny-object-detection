@@ -1,4 +1,5 @@
 #!/bin/bash
+
 ## Install dependancies:
 ##  + libedgetpu
 ##  + Vulakan
@@ -13,8 +14,8 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # upgrade
-echo "Updating packages..."; apt-get update
-echo "Upgrading packages..."; apt-get full-upgrade
+echo "Updating packages..."; apt-get update -y
+echo "Upgrading packages..."; apt-get full-upgrade -y
 
 if [[ $GITHUB_ACTIONS ]]; then
    CROSSTC="."
@@ -27,14 +28,17 @@ fi
 # + Procedure: hard reboot without coral then hard reboot with coral
 # + website: https://coral.ai/docs/accelerator/get-started/#3-run-a-model-on-the-edge-tpu
 echo "Installing clang ..."; apt-get install -y clang
+echo "Installing curl ..."; sudo apt install -y curl
 
 sudo apt-get update
+sudo apt-get full-upgrade
 
 echo "deb https://packages.cloud.google.com/apt coral-edgetpu-stable main" | sudo tee /etc/apt/sources.list.d/coral-edgetpu.list
 
 curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
 
 sudo apt-get update
+sudo apt-get full-upgrade
 
 sudo apt install -y libedgetpu1-std libedgetpu-dev
 
@@ -91,7 +95,9 @@ sudo apt install cmake
 # Build for Arm
 git clone https://github.com/occipital/OpenNI2
 cd OpenNI2
-find . -name Makefile -exec sed -i 's/CFLAGS += -Wall/CFLAGS += -Wall -mfloat-abi=hard/g' {} \;
+if ! [[ $GITHUB_ACTIONS ]]; then
+   find . -name Makefile -exec sed -i 's/CFLAGS += -Wall/CFLAGS += -Wall -mfloat-abi=hard/g' {} \;
+fi
 
 make
 sudo ./Packaging/Linux/install.sh
