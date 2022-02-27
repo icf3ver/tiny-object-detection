@@ -37,10 +37,12 @@ echo "deb https://packages.cloud.google.com/apt coral-edgetpu-stable main" | sud
 
 curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
 
-sudo apt-get update
-sudo apt-get full-upgrade
+apt update
+apt full-upgrade
+apt update
 
-sudo apt install -y libedgetpu1-std libedgetpu-dev
+apt install -y libedgetpu1-std
+apt install -y libedgetpu-dev
 
 echo "Installing edgetpu library and header files ..."
 git clone https://coral.googlesource.com/edgetpu
@@ -51,6 +53,17 @@ git checkout release-chef
 cp libedgetpu/libedgetpu_arm64_throttled.so /usr/lib/$CROSSTC/libedgetpu.so >> /dev/null
 cp libedgetpu/edgetpu.h /usr/include/edgetpu.h >> /dev/null
 cd ..
+
+
+apt remove -y libedgetpu1-std
+apt remove -y libedgetpu-dev
+
+apt update
+apt full-upgrade
+apt update
+
+apt install -y libedgetpu1-std
+apt install -y libedgetpu-dev
 
 # vulkan dependencies
 echo "Installing Vulkan Packages ..."
