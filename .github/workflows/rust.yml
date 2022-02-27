@@ -15,6 +15,6 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - name: Dependencies
-      run: sudo apt install git; sudo sh ./dependencies.sh
+      run: sudo apt install git; sudo -E sh ./dependencies.sh
     - name: Build
       run: export OPENNI2_REDIST="/lib/libOpenNI2"; export OPENNI2_REDIST64="/lib/libOpenNI2"; cargo build --verbose

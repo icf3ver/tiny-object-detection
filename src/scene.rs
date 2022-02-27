@@ -136,7 +136,7 @@ pub(crate) async fn process_scene((point_cloud_queue, target_buffer_queue, not_e
     impl DeviceSendWrapper{ 
         fn inner(self) -> Arc<NI2Device> { self.0 }
         fn create_stream<'a>(self, sensor_type: SensorType) -> StreamSendWrapper<'a> {
-            StreamSendWrapper(Arc::new(self.0.create_stream(sensor_type).unwrap()), self.0) // for now unwrap
+            todo!("patch lifetimes"); //StreamSendWrapper(Arc::new(self.0.create_stream(sensor_type).unwrap()), self.0.clone()) // for now unwrap
         }
     }
 
@@ -197,7 +197,7 @@ pub(crate) async fn process_scene((point_cloud_queue, target_buffer_queue, not_e
 }
 
 pub(crate) struct Scene {
-    map: Vec<(f32, f32, f32)> 
+    pub(crate) map: Vec<(f32, f32, f32)> 
 }
 impl Scene{
     fn integrate(&mut self, new_scene_data: impl Iterator<Item = (f32, f32, f32)>){
@@ -320,7 +320,7 @@ pub(crate) async fn append_scene((point_cloud_queue, target_buffer_queue, not_em
         .add_sampled_image(imgview_color_depth, sampler_img1).unwrap()
         .add_sampled_image(imgview_target, sampler_img2).unwrap()
         .add_image(ImageView::new(image.clone()).unwrap()).unwrap();
-    let set = (&set).build();
+    let set = todo!("build"); //(&set).build();
 
     let dest = CpuAccessibleBuffer::from_iter(
         device.clone(), 
@@ -344,7 +344,7 @@ pub(crate) async fn append_scene((point_cloud_queue, target_buffer_queue, not_em
             PipelineBindPoint::Compute,
             compute_pipeline.layout().clone(),
             0,
-            set//.clone()
+            todo!() //set//.clone()
         )
         .dispatch([320 / 8, 240 / 8, 1]).unwrap()
         .copy_image_to_buffer(

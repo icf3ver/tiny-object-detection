@@ -16,11 +16,19 @@ fi
 echo "Updating packages..."; apt-get update
 echo "Upgrading packages..."; apt-get full-upgrade
 
+if [[ $GITHUB_ACTIONS ]]; then
+   CROSSTC="."
+else
+   CROSSTC="arm-linux-gnueabihf"
+fi
+
 # edgetpu dependencies
 # + Test lib: https://github.com/google-coral/pycoral.git
 # + Procedure: hard reboot without coral then hard reboot with coral
 # + website: https://coral.ai/docs/accelerator/get-started/#3-run-a-model-on-the-edge-tpu
 echo "Installing clang ..."; apt-get install -y clang
+
+sudo apt-get update
 
 echo "deb https://packages.cloud.google.com/apt coral-edgetpu-stable main" | sudo tee /etc/apt/sources.list.d/coral-edgetpu.list
 
@@ -28,8 +36,7 @@ curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
 
 sudo apt-get update
 
-sudo apt install -y libedgetpu-std
-sudo apt install -y libedgetpu-dev
+sudo apt install -y libedgetpu1-std libedgetpu-dev
 
 echo "Installing edgetpu library and header files ..."
 git clone https://coral.googlesource.com/edgetpu
@@ -37,7 +44,7 @@ cd edgetpu
 git checkout release-chef
 # TODO clean
 
-cp libedgetpu/libedgetpu_arm64_throttled.so /usr/lib/*-linux-gnu*/libedgetpu.so >> /dev/null
+cp libedgetpu/libedgetpu_arm64_throttled.so /usr/lib/$CROSSTC/libedgetpu.so >> /dev/null
 cp libedgetpu/edgetpu.h /usr/include/edgetpu.h >> /dev/null
 cd ..
 
@@ -88,6 +95,8 @@ find . -name Makefile -exec sed -i 's/CFLAGS += -Wall/CFLAGS += -Wall -mfloat-ab
 
 make
 sudo ./Packaging/Linux/install.sh
+cp ./Bin/*-Release/libOpenNI2.so /usr/lib/$CROSSTC/
+cp -r ./Bin/*-Release/OpenNI2 /usr/lib/$CROSSTC/
 
 # Adding current user to video group
 echo "Add user to video group so they may access the camera (requires reboot)"
@@ -95,7 +104,8 @@ sudo usermod -a -G video pi
 
 # Save env variables
 sudo mkdir /lib/libOpenNI2
-echo "export OPENNI2_REDIST /lib/libOpenNI2" >> ~/.bashrc
+echo 'export OPENNI2_REDIST="/lib/libOpenNI2"' >> ~/.bashrc
+echo 'export OPENNI2_REDIST64="/lib/libOpenNI2"' >> ~/.bashrc
 
 echo "A reboot is required for some changes to take effect."
 

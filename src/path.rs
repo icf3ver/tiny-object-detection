@@ -6,9 +6,9 @@ use tokio::time::Instant;
 use crate::scene::{Scene, Target};
 
 pub(crate) struct Path {
-    created: Instant,
-    modified: Instant,
-    directions: Vec<u8>,
+    pub(crate) created: Instant,
+    pub(crate) modified: Instant,
+    pub(crate) directions: Vec<u8>,
 }
 
 /// Modifies the Path with the new scene information
