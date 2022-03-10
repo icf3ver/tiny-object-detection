@@ -20,7 +20,7 @@ tokio = {version = "1.15.0", features = ["full"]}
 
 # Tf and coral tpu libs
 #edgetpu = { git = "https://github.com/ionosnetworks/edgetpu-rs", rev = "56961f2" }
-edgetpu = { git = "https://github.com/littletitan/edgetpu-rs", rev = "23311e0" }
+edgetpu = { git = "https://github.com/littletitan/edgetpu-rs",rev = "23311e0" }
 
 
 # Cameras
@@ -28,3 +28,4 @@ edgetpu = { git = "https://github.com/littletitan/edgetpu-rs", rev = "23311e0" }
 openni2 = "*" # For the PrimeSense camera
 openni2-sys = { git="https://github.com/TooManyBees/openni2-sys" }
 
+lazy_static = "*"

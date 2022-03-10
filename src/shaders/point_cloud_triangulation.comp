@@ -1,16 +1,46 @@
 #version 450
-// GLSL Point Cloud triangulation
-// TODO
+// GLSL img1_read Cloud triangulation
+// An elegant way to simplify the pointcloud.
 
-// Splitts the 320 x 420 screen into 4 sections.
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-layout(set = 0, binding = 0) uniform sampler2D img1;
-layout(set = 0, binding = 1) uniform sampler2D img2;
+layout(set = 0, binding = 0) uniform sampler2D img1; // All I care about is xyz and class 
+// layout(set = 0, binding = 1) uniform sampler2D img2;
 
-layout(set = 0, binding = 2, rgba8) uniform writeonly image2D depth; // Not the final output type. This is just so it builds
+layout(set = 0, binding = 2, rgba8) uniform image2D depth; // Not the final output type. This is just so it builds
+layout(set = 0, binding = 3, rgba8) uniform writeonly image2D out_class;
+
+const float max = 11.5;
+
+// Yolcat implementation has output of 224x224 which unlike 550x550 is conveniently cleanly divisible by 8
+const int img_size = 224; 
 
 void main() {
-    vec4 to_write = vec4(0, 0, 0, 0); // for now
-    imageStore(depth, ivec2(gl_GlobalInvocationID.xy), to_write);
+    uvec2 px = gl_GlobalInvocationID.xy;
+    vec4 img1_read = texture(img1, px).xyzw;
+    bool is_bg = img1_read.w == 0;
+    
+    ivec2 new_pos;
+    if (is_bg) { // None class
+        float inv_depth = max / img1_read.z;
+        new_pos = ivec2(px.xy) - ivec2(px.x % uint(inv_depth), px.y % uint(inv_depth));
+    } else { // Some class
+        ivec2 new_pos = ivec2(int(img1_read.w) % img_size, int(img1_read.w) / img_size); // Set position according to unique class
+    }
+    
+    vec3 depth_read = imageLoad(depth, new_pos).xyz;
+
+    vec4 to_write;
+    if (depth_read.z != 0) { // If there is already a value there average them 
+        // Note this makes the last value added weigh more
+        to_write = vec4((img1_read.xyz + depth_read) / 2.0, 0);
+    } else {
+        to_write = vec4(img1_read.xyz, 0);
+    }
+    
+    if (is_bg){
+        imageStore(depth, new_pos, to_write);
+    } else {
+        imageStore(out_class, new_pos, to_write);
+    }
 }
