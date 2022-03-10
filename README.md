@@ -10,6 +10,7 @@ OpenNI2 capable device capable of both color and depth streams:
  + Hacked Xbox Kinect
  + Carmine 1.09 or 1.08 (Adjust image input size 320 x 240)
  + Intel RealSense (Tested on)
+
 Edgetpu:
  + Google Coral (Testing on)
 
