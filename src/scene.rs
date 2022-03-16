@@ -53,45 +53,27 @@ struct Image {
     width: usize,
     height: usize,
     channels: usize,
-    data: Bytes,
+    data: Vec<f32>, //Bytes,
 }
 
-/*lazy_static! {
-    static ref MODEL_INTERPRETER: Cow<'static, _todo> = {
-        Cow::Owned(interpreter)
-    };    
-}*/
-
-async fn classify(frame_buffer: &mut [u32]) {
+fn classify<'a>(frame_buffer: &mut [u32], interpreter: &mut Interpreter<'a, &'a BuiltinOpResolver>) {
+    println!("here");
+    let mut i = -1;
+    let data = //Bytes::from(
+       frame_buffer.iter().filter(|_px| 
+       {i += 1; let res = i%224 < 224; res && i/224 < 224}).map( |px| { // WHAT THE hegg?
+          let out: [f32; 3] = u32::to_be_bytes(*px)[..3].iter().map(|byte| *byte as f32 / 255.0)
+             .collect::<Vec<f32>>().as_slice().try_into().unwrap();
+          out
+       }).flatten().collect::<Vec<f32>>();//.push(0.0).push(0.0).push(0.0);
+    //);
     // for now simply color
     let img = Image{
-        width: 640,
-        height: 480,
+        width: 224, //640,
+        height: 224, //480,
         channels: 3,
-        data: Bytes::from(frame_buffer.iter().map(|px| u32::to_be_bytes(*px)).flatten().collect::<Vec<u8>>())
+        data,
     };
-
-    println!("{}", edgetpu::version());
-    let model = FlatBufferModel::build_from_file(
-        "data/FRC_model_edgetpu.tflite",
-    ).expect("failed to load model");
-
-    let resolver = BuiltinOpResolver::default();
-    resolver.add_custom(edgetpu::custom_op(), edgetpu::register_custom_op());
-    
-    let builder = InterpreterBuilder::new(model, &resolver).expect("must create interpreter builder");
-
-    let edgetpu_context = EdgeTpuContext::open_device().expect("failed to open coral device");
-    let mut interpreter = builder.build().expect("must build interpreter");
-    
-    interpreter.set_external_context(
-        tflite::ExternalContextType::EdgeTpu,
-        edgetpu_context.to_external_context(),
-    );
-    interpreter.set_num_threads(2);
-    interpreter.allocate_tensors().expect("failed to allocate tensors.");
-      
-    //let mut interpreter = (&*MODEL_INTERPRETER).inner();
     let tensor_index = interpreter.inputs()[0];
     let required_shape = interpreter.tensor_info(tensor_index).unwrap().dims;
     if img.height != required_shape[1] 
@@ -103,17 +85,18 @@ async fn classify(frame_buffer: &mut [u32]) {
         eprintln!("\tchannels: {} vs {}", img.channels, required_shape[2]);
         panic!("TOREMOVE");
     }
-
+    
     interpreter.tensor_data_mut(tensor_index).unwrap()
         .copy_from_slice(img.data.as_ref());
     interpreter.invoke().expect("invoke failed");
-    
+    /*
     let outputs = interpreter.outputs();
     let mut results = Vec::new();
+    
     for &output in outputs {
        let tensor_info = interpreter.tensor_info(output).expect("must data");
        match tensor_info.element_kind {
-            tflite::context::ElementKind::kTfLiteUInt8 => {
+            tflite::context::ElementKind::kTfLiteInt8 => {
                 let out_tensor: &[u8] = interpreter.tensor_data(output).expect("must data");
                 let scale = tensor_info.params.scale;
                 let zero_point = tensor_info.params.zero_point;
@@ -160,7 +143,30 @@ pub(crate) async fn process_scene((point_cloud_queue, target_buffer_queue, not_e
             StreamSendWrapper(Arc::new(StreamSendDropper(Arc::new(self.0.create_stream(sensor_type).unwrap()))), self.0.clone()) // for now unwrap
         }
     }
+    
+    println!("{}", edgetpu::version());
+    let model = FlatBufferModel::build_from_file(
+       "data/FRC_model.tflite",
+    ).expect("failed to load model");
 
+    let resolver = BuiltinOpResolver::default();
+    resolver.add_custom(edgetpu::custom_op(), edgetpu::register_custom_op());
+    
+    let builder = InterpreterBuilder::new(model, &resolver).expect("must create interpreter builder");
+    
+    let edgetpu_context = EdgeTpuContext::open_device().expect("failed to open coral device");
+    
+    let mut interpreter = builder.build().expect("must build interpreter");
+    interpreter.set_external_context(
+        tflite::ExternalContextType::EdgeTpu,
+        edgetpu_context.to_external_context(),
+    );
+    interpreter.set_num_threads(2);
+    interpreter.allocate_tensors().expect("failed to allocate tensors.");
+
+
+    //let mut interpreter = (&*MODEL_INTERPRETER).inner();
+    
     openni2::init().unwrap();
     let device = DeviceSendWrapper(Arc::new(NI2Device::open_default().unwrap()));
     let device = device.clone(); // for depth buffer ^^ for color buffer
@@ -189,9 +195,11 @@ pub(crate) async fn process_scene((point_cloud_queue, target_buffer_queue, not_e
             println!("fps: {}", 60.0/(instant.elapsed().as_micros() as f32 / 1000000.0));
             instant = Instant::now();
         }
+
+    
         // Instance Segmentation
         // first 24 bits store true color and the last 8 store the class
-        classify(&mut buffer).await; // Go through each element and make it into a u16 
+        classify(&mut buffer, &mut interpreter); // Go through each element and make it into a u16 
         let mut target_buffer: Result<[u16; 640 * 480], _> = IntoIterator::into_iter(buffer).map(|px| ((px << 16) >> 16) as u16).collect::<Vec<u16>>().try_into(); // buffer should be dropped here
         
         //drop(buffer);
@@ -213,7 +221,14 @@ pub(crate) async fn process_scene((point_cloud_queue, target_buffer_queue, not_e
 }
 
 pub(crate) struct Scene {
-    pub(crate) map: Vec<(f32, f32, f32)> 
+    // pub(crate) map: Vec<(f32, f32, f32)> 
+    pub(crate) pos: Vec<(f32, f32)>,
+    pub(crate) height: Vec<f32>,
+
+    // Entities
+    pub(crate) balls: Vec<(f32, f32)>,
+    pub(crate) red_robots: Vec<(f32, f32)>,
+    pub(crate) blue_robots: Vec<(f32, f32)>,
 }
 impl Scene{
     fn integrate(&mut self, new_scene_data: impl Iterator<Item = (f32, f32, f32)>){

@@ -26,7 +26,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (not_empty_tx, mut not_empty_rx) = mpsc::channel(1);
     let target_queue: Arc<Mutex<Vec<Target>>> = Arc::new(Mutex::new(Vec::new()));
 
-    let scene: Arc<Mutex<Scene>> = Arc::new(Mutex::new(Scene{map: Vec::new()}));
+    let scene: Arc<Mutex<Scene>> = Arc::new(Mutex::new(Scene{
+       pos: Vec::new(), height: Vec::new(), 
+       balls: Vec::new(), 
+       red_robots: Vec::new(), blue_robots: Vec::new()
+    }));
     let path: Arc<Mutex<Path>> = {
         let created = Instant::now();
         Arc::new(Mutex::new(Path{
@@ -59,7 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         thread::sleep(heartbeat);
         // figure out scene
-        // scene::append_scene((point_cloud_queue.clone(), target_buffer_queue.clone(), &mut not_empty_rx), scene.clone()).await;
+        //scene::append_scene((point_cloud_queue.clone(), target_buffer_queue.clone(), &mut not_empty_rx), scene.clone()).await;
 
         // build paths from what we know
         // path::modify_path(path.clone(), target_queue.clone(), scene.clone()).await;

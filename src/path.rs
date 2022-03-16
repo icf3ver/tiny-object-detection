@@ -13,7 +13,46 @@ pub(crate) struct Path {
 
 /// Modifies the Path with the new scene information
 pub(crate) async fn modify_path(path: Arc<Mutex<Path>>, target_queue: Arc<Mutex<Vec<Target>>>, scene: Arc<Mutex<Scene>>) {
-    todo!();
+    scene.readable().await;
+    let mut scene_lock = scene.lock().unwrap();
+    
+    let mut set = BTreeSet::new();
+    let mut path: [i32; 224 * 224] = [-1; 224 * 224]; // -1 = undefined -2 = target
+    let mut cost: [u32; 224 * 224] = [u32::MAX; 224 * 224]; // Cost to travel from a point
+
+    let dest_node = scene_lock.balls[..3]; // closest to target node // Dijkstra's algorithm with 3 targets
+    path[dest_node[0]] = -2; path[dest_node[1]] = -2; path[dest_node[2]] = -2;
+    cost[dest_node[0]] = 0; cost[dest_node[1]] = 0; cost[dest_node[2]] = 0; 
+    set.insert(dest_node);
+    let mut min_neighbor = -1;
+    for node in set {
+        min_neighbor = -1;
+        for neighbor in scene.get_node().neighbors() {
+            if cost[neighbor] < cost[min_neighbor] {
+                let min_neighbor = neighbor;
+                cost[node] = cost[min_neighbor] + scene_lock.height[min_neighbor]; // todo normalize map
+                path[node] = min_neighbor;
+            }
+            set.remove(neighbor);
+        }
+    }
+
+    const start_node: i32 = todo!(); // TODO calibrate
+    let new_path = Vec::new();
+    let node = start_node;
+    while node != -2 { 
+        new_path.push(scene_lock.pos2d[node]);
+        node = path[node]
+    }
+
+    drop(scene_lock);
+
+    path.writable().await;
+    let path_lock = path.lock().unwrap(); 
+    path_lock = Path {
+        created: Instant::now(), 
+        directions: new_path
+    } 
 }
 
 /// Handles Path Requests from Rio

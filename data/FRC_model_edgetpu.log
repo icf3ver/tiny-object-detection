@@ -4,18 +4,15 @@ Output: FRC_model_edgetpu.tflite
 
 Operator                       Count      Status
 
-QUANTIZE                       5          Mapped to Edge TPU
-QUANTIZE                       1          Operation is otherwise supported, but not mapped due to some unspecified limitation
-CONV_2D                        87         Mapped to Edge TPU
-DEQUANTIZE                     5          Operation is working on an unsupported data type
-RESIZE_BILINEAR                2          Mapped to Edge TPU
-RESIZE_BILINEAR                1          Operation is otherwise supported, but not mapped due to some unspecified limitation
-TANH                           5          Mapped to Edge TPU
-ADD                            18         Mapped to Edge TPU
-MAX_POOL_2D                    1          Mapped to Edge TPU
-PAD                            2          Mapped to Edge TPU
-CONCATENATION                  2          Operation is otherwise supported, but not mapped due to some unspecified limitation
-CONCATENATION                  1          Mapped to Edge TPU
+RESIZE_BILINEAR                3          Mapped to Edge TPU
+CONV_2D                        64         Mapped to Edge TPU
+QUANTIZE                       13         Mapped to Edge TPU
+ADD                            11         Mapped to Edge TPU
 RELU                           1          Mapped to Edge TPU
-RESHAPE                        12         Mapped to Edge TPU
-RESHAPE                        3          Operation is otherwise supported, but not mapped due to some unspecified limitation
+RESHAPE                        1          Operation is otherwise supported, but not mapped due to some unspecified limitation
+RESHAPE                        14         Mapped to Edge TPU
+TANH                           5          Mapped to Edge TPU
+PAD                            5          Mapped to Edge TPU
+CONCATENATION                  1          Operation is otherwise supported, but not mapped due to some unspecified limitation
+CONCATENATION                  2          Mapped to Edge TPU
+DEPTHWISE_CONV_2D              15         Mapped to Edge TPU
