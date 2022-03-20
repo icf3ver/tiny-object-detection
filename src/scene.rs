@@ -29,8 +29,11 @@ use openni2::Frame;
 use openni2::{OniRGB888Pixel, OniDepthPixel};
 use crate::scene::tflite::Interpreter;
 
+use image::Pixel;
+
 use std::convert::TryInto;
 use std::borrow::Cow;
+use core::array::IntoIter;
 
 #[derive(PartialEq)]
 enum TargetClass {
@@ -53,17 +56,33 @@ struct Image {
     width: usize,
     height: usize,
     channels: usize,
-    data: Vec<f32>, //Bytes,
+    data: Vec<u8>, //Bytes,
+}
+
+fn postprocess<'a>(results: Vec<Vec<f32>>) -> [u32; 640 * 480] {
+    println!("{}", results[3].len());
+    // TODO: postprocess outputs
+    //let channels = results[2].as_slice().chunks(4).map(|chunk| ((chunk[0], chunk[1]), (chunk[2], chunk[3]))).unzip::<(f32, f32), (f32, f32), Vec<(f32, f32)>, Vec<(f32, f32)>>();
+    //let channels: ((Vec<f32>, Vec<f32>), (Vec<f32>, Vec<f32>)) = (channels.0.into_iter().unzip(), channels.1.into_iter().unzip()); // flipped g and b
+    //let buffer_reader = image::Rgba::<&[f32]>::from_channels(channels.0.0.as_slice(), channels.0.1.as_slice(), channels.1.0.as_slice(), channels.1.1.as_slice());
+    //println!("{:?}", buffer_reader);
+    //println!("{:?}", results[4]);
+    //let buff = results[3].iter().map(|fl| (*fl) as u8).collect::<Vec<u8>>();
+    //let scene_image = ImageBuffer::<Rgba<u8>, _>::from_raw(56, 56, &buff[..]).unwrap();
+    //scene_image.save("result2.png").unwrap();
+    // image::load(buffer_reader, Rgba32FImage).unwrap().save("result2.png").unwrap();
+    
+    todo!("Finish postprocessing"); 
 }
 
 fn classify<'a>(frame_buffer: &mut [u32], interpreter: &mut Interpreter<'a, &'a BuiltinOpResolver>) {
     println!("here");
     let mut i = -1;
     let data = frame_buffer.iter().filter(|_px| {i += 1; let res = i%224 < 224; res && i/224 < 224}).map( |px| {
-        let out: [f32; 3] = u32::to_be_bytes(*px)[..3].iter().map(|byte| *byte as f32 / 255.0)
-            .collect::<Vec<f32>>().as_slice().try_into().unwrap();
+        let out: [u8; 3] = u32::to_be_bytes(*px)[..3].iter().map(|byte| *byte) //as f32 / 255.0)
+            .collect::<Vec<u8>>().as_slice().try_into().unwrap();
         out
-    }).flatten().collect::<Vec<f32>>();
+    }).flatten().collect::<Vec<u8>>();
     
     // for now simply color
     let img = Image{
@@ -74,38 +93,39 @@ fn classify<'a>(frame_buffer: &mut [u32], interpreter: &mut Interpreter<'a, &'a 
     };
     let tensor_index = interpreter.inputs()[0];
     let required_shape = interpreter.tensor_info(tensor_index).unwrap().dims;
-    /*if img.height != required_shape[1] 
+    if img.height != required_shape[1] 
             || img.width != required_shape[2]
             || img.channels != required_shape[3] {
         eprintln!("Input size mismatches:");
         eprintln!("\twidth: {} vs {}", img.width, required_shape[0]);
         eprintln!("\theight: {} vs {}", img.height, required_shape[1]);
         eprintln!("\tchannels: {} vs {}", img.channels, required_shape[2]);
-        panic!("TOREMOVE");
-    }*/ // Debugging 
+    } 
     
     interpreter.tensor_data_mut(tensor_index).unwrap()
         .copy_from_slice(img.data.as_ref());
     interpreter.invoke().expect("invoke failed");
     
     let outputs = interpreter.outputs();
-    let mut results = Vec::new();
-    
+    let mut results: Vec<Vec<f32>> = Vec::new();
+
     for &output in outputs {
        let tensor_info = interpreter.tensor_info(output).expect("must data");
        match tensor_info.element_kind {
-            tflite::context::ElementKind::kTfLiteInt8 => { // TODO
+           tflite::context::ElementKind::kTfLiteUInt8 => { // TODO
                 let out_tensor: &[u8] = interpreter.tensor_data(output).expect("must data");
                 let scale = tensor_info.params.scale;
                 let zero_point = tensor_info.params.zero_point;
-                results = out_tensor
+                results.push(out_tensor
                     .into_iter()
                     .map(|&x| scale * (((x as i32) - zero_point) as f32))
-                    .collect();
-            }
+                    .collect())
+                    // .chunks(4).map(|chunk| (chunk[0], chunk[1])).unzip();
+                // results.push(image::Rgba::from_slice(chans))
+            } 
             tflite::context::ElementKind::kTfLiteFloat32 => {
                 let out_tensor: &[f32] = interpreter.tensor_data(output).expect("must data");
-                results = out_tensor.into_iter().copied().collect();
+                results.push(out_tensor.into_iter().copied().collect());
             }
             _ => eprintln!(
                 "Tensor {} has unsupported output type {:?}.",
@@ -113,8 +133,8 @@ fn classify<'a>(frame_buffer: &mut [u32], interpreter: &mut Interpreter<'a, &'a 
             ),
         }
     }
-    // TODO: postprocess outputs
-    //frame_buffer = result.into_iter().try_into();
+
+    frame_buffer.copy_from_slice(&postprocess(results));
 }
 
 /// Processes the camera input streams and detects targets.
@@ -144,11 +164,13 @@ pub(crate) async fn process_scene((point_cloud_queue, target_buffer_queue, not_e
     
     println!("{}", edgetpu::version());
     let model = FlatBufferModel::build_from_file(
-       "data/FRC_model.tflite",
+       "data/FRC_model.tflite", // TODO fix edgetpu model issues.
     ).expect("failed to load model");
 
     let resolver = BuiltinOpResolver::default();
     resolver.add_custom(edgetpu::custom_op(), edgetpu::register_custom_op());
+    //resolver.add_custom(edgetpu::custom_op(), edgetpu::register_custom_op());
+    //resolver.add_custom(edgetpu::custom_op(), edgetpu::register_custom_op());
     
     let builder = InterpreterBuilder::new(model, &resolver).expect("must create interpreter builder");
     
@@ -201,8 +223,8 @@ pub(crate) async fn process_scene((point_cloud_queue, target_buffer_queue, not_e
         let mut target_buffer: Result<[u16; 640 * 480], _> = IntoIterator::into_iter(buffer).map(|px| ((px << 16) >> 16) as u16).collect::<Vec<u16>>().try_into(); // buffer should be dropped here
         
         //drop(buffer);
-        //let depth_buffer: Result<[u16; 640 * 480], _> = depth.clone().inner().read_frame::<OniDepthPixel>().expect("Depth frame not available to read.")
-        //    .pixels().into_iter().map(|depth| *depth).collect::<Vec<u16>>().try_into();
+        let depth_buffer: Result<[u16; 640 * 480], _> = depth.clone().inner().read_frame::<OniDepthPixel>().expect("Depth frame not available to read.")
+            .pixels().into_iter().map(|depth| *depth).collect::<Vec<u16>>().try_into();
         
         // TODO: when no targets are fixible keep looking don't process scene.
         

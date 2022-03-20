@@ -29,3 +29,4 @@ openni2 = "*" # For the PrimeSense camera
 openni2-sys = { git="https://github.com/TooManyBees/openni2-sys" }
 
 lazy_static = "*"
+
