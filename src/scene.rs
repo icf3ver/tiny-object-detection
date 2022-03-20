@@ -60,30 +60,62 @@ struct Image {
 }
 
 fn postprocess<'a>(results: Vec<Vec<f32>>) -> [u32; 640 * 480] {
-    println!("{}", results[3].len());
-    // TODO: postprocess outputs
-    //let channels = results[2].as_slice().chunks(4).map(|chunk| ((chunk[0], chunk[1]), (chunk[2], chunk[3]))).unzip::<(f32, f32), (f32, f32), Vec<(f32, f32)>, Vec<(f32, f32)>>();
-    //let channels: ((Vec<f32>, Vec<f32>), (Vec<f32>, Vec<f32>)) = (channels.0.into_iter().unzip(), channels.1.into_iter().unzip()); // flipped g and b
-    //let buffer_reader = image::Rgba::<&[f32]>::from_channels(channels.0.0.as_slice(), channels.0.1.as_slice(), channels.1.0.as_slice(), channels.1.1.as_slice());
-    //println!("{:?}", buffer_reader);
-    //println!("{:?}", results[4]);
-    //let buff = results[3].iter().map(|fl| (*fl) as u8).collect::<Vec<u8>>();
-    //let scene_image = ImageBuffer::<Rgba<u8>, _>::from_raw(56, 56, &buff[..]).unwrap();
-    //scene_image.save("result2.png").unwrap();
-    // image::load(buffer_reader, Rgba32FImage).unwrap().save("result2.png").unwrap();
+    let dets = &results[4]; // first detection
     
-    todo!("Finish postprocessing"); 
+    // I only am interested in the masks for now
+    // Right now this is essentially semantic segmentation
+    
+    /*
+    // ident4.chunks(81).map(|chunk| chunk[0])
+    // identity4.chunks(81).map(|chunk| chunk[1]) = Red Robot
+    // identity4.chunks(81).map(|chunk| chunk[2]) = Blue Robot
+    // identity4.chunks(81).map(|chunk| chunk[3]) = Ball
+
+    println!("{:?}", dets.chunks(81).map(|chunk| chunk.iter().map(|a| *a).take(4) // Debugging
+    //.filter(|a| *a >= 0.0)
+    .collect::<Vec<f32>>()).collect::<Vec<Vec<f32>>>().as_slice().chunks(28).collect::<Vec<&[Vec<f32>]>>());
+    */
+    
+    let classes: [u8; 28 * 28] = dets.chunks(81).map(|chunk| { // TODO differentiate between instances
+        let mut max = 0.0;
+        let cls: [bool; 4] = chunk.iter().take(4).map(|a| {*a > max && {max = *a; true}})
+                .collect::<Vec<bool>>().as_slice().try_into().unwrap();
+        match cls {
+            [false, true, false, false] => 1, // Red robot
+            [false, _, true, false] => 2,
+            [false, _, _, true] => 3,
+            [false, _, _, _] | [_, _, _, _] => 0, // TODO first element
+        }
+    }).collect::<Vec<u8>>().as_slice().try_into().unwrap();
+
+    for chunk in classes.as_slice().chunks(28).collect::<Vec<&[u8]>>().iter() {
+        println!("{:?}", chunk);
+    }
+
+    // TODO use confidence to shape mask
+    let sample: [u8; 224 * 224] = classes.iter().map(|cls| [*cls; 8]).flatten().collect::<Vec<u8>>().as_slice().try_into().unwrap();
+    
+    todo!("Tile the image")
 }
 
 fn classify<'a>(frame_buffer: &mut [u32], interpreter: &mut Interpreter<'a, &'a BuiltinOpResolver>) {
-    println!("here");
-    let mut i = -1;
-    let data = frame_buffer.iter().filter(|_px| {i += 1; let res = i%224 < 224; res && i/224 < 224}).map( |px| {
-        let out: [u8; 3] = u32::to_be_bytes(*px)[..3].iter().map(|byte| *byte) //as f32 / 255.0)
-            .collect::<Vec<u8>>().as_slice().try_into().unwrap();
-        out
-    }).flatten().collect::<Vec<u8>>();
-    
+    println!("Classifying");
+    let data = image::io::Reader::open("data/frc_balls.png").unwrap().decode().unwrap().to_rgb8().into_raw();
+
+    /* TODO tile the image
+    // 640 * 480 image
+    // 224 * 224 sample
+    // 3 * 3 samples per image (Requires a batch size of 9)
+    let data = {
+        let mut i = -1;
+        frame_buffer.iter().filter(|_px| {i += 1; let res = i%224 < 224; res && i/224 < 224}).map( |px| {
+            let out: [u8; 3] = u32::to_be_bytes(*px)[..3].iter().map(|byte| *byte) //as f32 / 255.0)
+                .collect::<Vec<u8>>().as_slice().try_into().unwrap();
+            out
+        }).flatten().collect::<Vec<u8>>()
+    };
+    */
+
     // for now simply color
     let img = Image{
         width: 224, //640,
@@ -91,6 +123,7 @@ fn classify<'a>(frame_buffer: &mut [u32], interpreter: &mut Interpreter<'a, &'a 
         channels: 3,
         data,
     };
+
     let tensor_index = interpreter.inputs()[0];
     let required_shape = interpreter.tensor_info(tensor_index).unwrap().dims;
     if img.height != required_shape[1] 
@@ -102,10 +135,12 @@ fn classify<'a>(frame_buffer: &mut [u32], interpreter: &mut Interpreter<'a, &'a 
         eprintln!("\tchannels: {} vs {}", img.channels, required_shape[2]);
     } 
     
+    let _start_time = Instant::now();
     interpreter.tensor_data_mut(tensor_index).unwrap()
         .copy_from_slice(img.data.as_ref());
     interpreter.invoke().expect("invoke failed");
-    
+    println!("eval time: {}μs", _start_time.elapsed().as_micros());
+
     let outputs = interpreter.outputs();
     let mut results: Vec<Vec<f32>> = Vec::new();
 
@@ -116,12 +151,8 @@ fn classify<'a>(frame_buffer: &mut [u32], interpreter: &mut Interpreter<'a, &'a 
                 let out_tensor: &[u8] = interpreter.tensor_data(output).expect("must data");
                 let scale = tensor_info.params.scale;
                 let zero_point = tensor_info.params.zero_point;
-                results.push(out_tensor
-                    .into_iter()
-                    .map(|&x| scale * (((x as i32) - zero_point) as f32))
-                    .collect())
-                    // .chunks(4).map(|chunk| (chunk[0], chunk[1])).unzip();
-                // results.push(image::Rgba::from_slice(chans))
+                results.push(out_tensor.into_iter()
+                    .map(|&x| scale * (((x as i32) - zero_point) as f32)).collect());
             } 
             tflite::context::ElementKind::kTfLiteFloat32 => {
                 let out_tensor: &[f32] = interpreter.tensor_data(output).expect("must data");
@@ -133,12 +164,12 @@ fn classify<'a>(frame_buffer: &mut [u32], interpreter: &mut Interpreter<'a, &'a 
             ),
         }
     }
-
+    
     frame_buffer.copy_from_slice(&postprocess(results));
 }
 
 /// Processes the camera input streams and detects targets.
-pub(crate) async fn process_scene((point_cloud_queue, target_buffer_queue, not_empty): (&Arc<Mutex<Vec<[u16; 640 * 480]>>>, &Arc<Mutex<Vec<[u16; 640 * 480]>>>, Sender<()>)) {    
+pub(crate) async fn process_scene((point_cloud_queue, target_buffer_queue, not_empty): (&Arc<Mutex<Vec<[u16; 640 * 480]>>>, &Arc<Mutex<Vec<[u16; 640 * 480]>>>, Sender<()>)) {
     // This quick hack lets me implement Send for the variables that need to be held across the await.
     
     #[derive(Clone)]
@@ -162,6 +193,7 @@ pub(crate) async fn process_scene((point_cloud_queue, target_buffer_queue, not_e
         }
     }
     
+    // Load FlatBufferModel
     println!("{}", edgetpu::version());
     let model = FlatBufferModel::build_from_file(
        "data/FRC_model.tflite", // TODO fix edgetpu model issues.
@@ -169,8 +201,6 @@ pub(crate) async fn process_scene((point_cloud_queue, target_buffer_queue, not_e
 
     let resolver = BuiltinOpResolver::default();
     resolver.add_custom(edgetpu::custom_op(), edgetpu::register_custom_op());
-    //resolver.add_custom(edgetpu::custom_op(), edgetpu::register_custom_op());
-    //resolver.add_custom(edgetpu::custom_op(), edgetpu::register_custom_op());
     
     let builder = InterpreterBuilder::new(model, &resolver).expect("must create interpreter builder");
     
@@ -183,10 +213,8 @@ pub(crate) async fn process_scene((point_cloud_queue, target_buffer_queue, not_e
     );
     interpreter.set_num_threads(2);
     interpreter.allocate_tensors().expect("failed to allocate tensors.");
-
-
-    //let mut interpreter = (&*MODEL_INTERPRETER).inner();
     
+    // Load intel realsense (openni2 device)
     openni2::init().unwrap();
     let device = DeviceSendWrapper(Arc::new(NI2Device::open_default().unwrap()));
     let device = device.clone(); // for depth buffer ^^ for color buffer
@@ -198,10 +226,9 @@ pub(crate) async fn process_scene((point_cloud_queue, target_buffer_queue, not_e
 
     let mut instant = Instant::now();
     let mut frame = 0;
-    loop {
+    loop { 
         let mut buffer: [u32; 640 * 480] = unsafe { mem::zeroed() };
         
-        frame += 1;
         { // Defining scope as to not hold non Send vars across await
             let color_frame = color.clone().inner().read_frame::<OniRGB888Pixel>().expect("Color frame not available to read.");
 
@@ -211,32 +238,34 @@ pub(crate) async fn process_scene((point_cloud_queue, target_buffer_queue, not_e
                 buffer[i] = ((color.r as u32) << 24) | ((color.g as u32) << 16) | ((color.b as u32) << 8);
             }
         }
-        if frame % 60 == 0 { // frame rate
-            println!("fps: {}", 60.0/(instant.elapsed().as_micros() as f32 / 1000000.0));
-            instant = Instant::now();
-        }
 
-    
         // Instance Segmentation
         // first 24 bits store true color and the last 8 store the class
         classify(&mut buffer, &mut interpreter); // Go through each element and make it into a u16 
-        let mut target_buffer: Result<[u16; 640 * 480], _> = IntoIterator::into_iter(buffer).map(|px| ((px << 16) >> 16) as u16).collect::<Vec<u16>>().try_into(); // buffer should be dropped here
+        let mut target_buffer: [u16; 640 * 480] = IntoIterator::into_iter(buffer).map(|px| ((px << 16) >> 16) as u16).collect::<Vec<u16>>().try_into().unwrap(); // buffer should be dropped here
         
         //drop(buffer);
-        let depth_buffer: Result<[u16; 640 * 480], _> = depth.clone().inner().read_frame::<OniDepthPixel>().expect("Depth frame not available to read.")
-            .pixels().into_iter().map(|depth| *depth).collect::<Vec<u16>>().try_into();
+        let depth_buffer: [u16; 640 * 480] = depth.clone().inner().read_frame::<OniDepthPixel>().expect("Depth frame not available to read.")
+            .pixels().into_iter().map(|depth| *depth).collect::<Vec<u16>>().try_into().unwrap();
         
-        // TODO: when no targets are fixible keep looking don't process scene.
+        // TODO: when no targets are found keep looking don't process scene.
         
         // append target and img and disparity
-        /*let (mut target_buffer_queue_lock, mut point_cloud_queue_lock) 
+        let (mut target_buffer_queue_lock, mut point_cloud_queue_lock) 
             = join!(target_buffer_queue.lock(), point_cloud_queue.lock());
-        point_cloud_queue_lock.push(depth_buffer.unwrap()); // if I have time I can use color to help with optimization accuracy
+        point_cloud_queue_lock.push(depth_buffer); // if I have time I can use color to help with optimization accuracy
         target_buffer_queue_lock.push(target_buffer); // all the points containing targets
         drop(point_cloud_queue_lock);
         drop(target_buffer_queue_lock);
  
-        not_empty.try_send(()).unwrap_or(());*/ // Only will have an effect is append scene is stuck
+        not_empty.try_send(()).unwrap_or(()); // Only will have an effect is append scene is stuck
+        
+        // Frame rate
+        frame += 1;
+        if frame % 60 == 0 {
+            println!("fps: {}", 60.0/(instant.elapsed().as_micros() as f32 / 1000000.0));
+            instant = Instant::now();
+        }
     }
 }
 
