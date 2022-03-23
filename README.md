@@ -14,13 +14,6 @@ OpenNI2 capable device capable of both color and depth streams:
 
 Edgetpu: Google Coral (Testing on)
 
-# Execution
-Run with 2GB swapspace (Will be necessary later) </br>
-Run with 4GB stacksize for speedy image processing </br>
-```RUSTFLAGS="-C link-args=-Wl,-zstack-size=4194304"``` </br>
-Run in release mode to avoid a Segmentation fault caused by 
-failure to release 2GBs of buffer when dropped before reallocation.
-
 # Dependencies
 Simply execute the `dependencies.sh` batch file
 
