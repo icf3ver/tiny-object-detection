@@ -20,10 +20,6 @@ echo "Upgrading packages..."; sudo apt-get full-upgrade -y
 
 if [[ $GITHUB_ACTIONS ]]; then
    CROSSTC="."
-   # Build with 32bit binaries
-   sudo apt-get install gcc-multilib
-   sudo apt-get install ia32-libs-dev
-   sudo apt-get install g++-multilib
 else
    CROSSTC="arm-linux-gnueabihf"
 fi
@@ -46,27 +42,54 @@ sudo apt update
 sudo apt full-upgrade
 sudo apt update
 
-#sudo apt install -y libedgetpu1-max
-#sudo apt install -y libedgetpu-dev
-
 echo "Installing edgetpu library and header files ..."
 
-# compile for edgetpu with --min_runtime_version 13
-$(
-    sudo rm /usr/lib/$CROSSTC/libedgetpu.so
-    sudo rm /usr/lib/$CROSSTC/libedgetpu.so.1
-    sudo rm /usr/lib/$CROSSTC/libedgetpu.so.1.0
+if [[ $GITHUB_ACTIONS ]]; then
+    # For now I don't have the time to sink into finding out why other solutions don't work
+    
+    apt install -y libedgetpu1-std
+    apt install -y libedgetpu-dev
 
-    git clone https://github.com/google-coral/edgetpu
+    git clone https://coral.googlesource.com/edgetpu
     cd edgetpu
+    git checkout release-chef
+    # TODO clean
 
-    sudo cp libedgetpu/edgetpu.h /usr/include/edgetpu.h
-    sudo cp libedgetpu/edgetpu_c.h /usr/include/edgetpu_c.h
+    cp libedgetpu/libedgetpu_arm64_throttled.so /usr/lib/$CROSSTC/libedgetpu.so >> /dev/null
+    cp libedgetpu/edgetpu.h /usr/include/edgetpu.h >> /dev/null
+    cd ..
 
-    sudo cp libedgetpu/direct/armv7a/libedgetpu.so.* /usr/lib/$CROSSTC
-    cd /usr/lib/$CROSSTC
-    sudo ln libedgetpu.so.1.0 libedgetpu.so
-)
+    apt remove -y libedgetpu1-std
+    apt remove -y libedgetpu-dev
+
+    apt update
+    apt full-upgrade
+    apt update
+
+    apt install -y libedgetpu1-std
+    apt install -y libedgetpu-dev
+else
+    # WARNING: Not theroughly tested!
+    # You may need to do a manual install of the https://github.com/google-coral/edgetpu library
+    # Do not forget to link edgetpu.so to edgetpu.so.1.0 in the cross toolchain lib folder.
+
+    # compile for edgetpu with --min_runtime_version 13
+    $(
+        sudo rm /usr/lib/$CROSSTC/libedgetpu.so
+        sudo rm /usr/lib/$CROSSTC/libedgetpu.so.1
+        sudo rm /usr/lib/$CROSSTC/libedgetpu.so.1.0
+
+        git clone https://github.com/google-coral/edgetpu
+        cd edgetpu
+
+        sudo cp libedgetpu/edgetpu.h /usr/include/edgetpu.h
+        sudo cp libedgetpu/edgetpu_c.h /usr/include/edgetpu_c.h
+
+        sudo cp libedgetpu/direct/armv7a/libedgetpu.so.* /usr/lib/$CROSSTC
+        cd /usr/lib/$CROSSTC
+        sudo ln libedgetpu.so.1.0 libedgetpu.so
+    )
+fi
 
 # Vulkan Dependencies
 echo "Installing Vulkan Dependencies ..."
