@@ -54,7 +54,9 @@ pub(crate) async fn modify_path(arc_path: Arc<Mutex<Path>>, target_queue: Arc<Mu
                 // PX:    1   2  // For space
                 // BALL: 123 123
                 // FMT: 0 = not checked 1 = checked
+
                 ball_checked[node] = ball_checked[node] & u8::pow(2, ball[neighbor] as u32) * u8::pow(8, (neighbor % 2) as u32); // TODO fix up. Not the fastest way.
+
                 
                 todo!("Stopped here for the night")
             }
