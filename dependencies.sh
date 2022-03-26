@@ -20,6 +20,10 @@ echo "Upgrading packages..."; sudo apt-get full-upgrade -y
 
 if [[ $GITHUB_ACTIONS ]]; then
    CROSSTC="."
+   # Build with 32bit binaries
+   sudo apt-get install gcc-multilib
+   sudo apt-get install ia32-libs-dev
+   sudo apt-get install g++-multilib
 else
    CROSSTC="arm-linux-gnueabihf"
 fi
