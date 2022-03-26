@@ -1,13 +1,11 @@
-#[macro_use] extern crate lazy_static;
-
 mod path;
 pub(crate) mod scene;
-pub(crate) mod cs {
+/*pub(crate) mod cs {
     vulkano_shaders::shader!{
         ty: "compute",
         path: "src/shaders/point_cloud_triangulation.comp"
     }
-}
+}*/
 
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};

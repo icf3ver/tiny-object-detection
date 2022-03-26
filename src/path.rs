@@ -36,25 +36,25 @@ pub(crate) async fn modify_path(arc_path: Arc<Mutex<Path>>, target_queue: Arc<Mu
         set.push(dest_node);
     }
     
-    let mut min_neighbor = usize::MAX - 1;
+    let mut min_neighbor_cost = f32::MAX - 1.0;
     while let Some(node) = set.pop() {
-        min_neighbor = usize::MAX - 1;
+        min_neighbor_cost = f32::MAX - 1.0;
         for neighbor in (*scene_lock).neighbors(node) {
-            if cost[neighbor] < cost[min_neighbor] { // track back closest neighbor
-                cost[node] = cost[min_neighbor] + scene_lock.height[min_neighbor]; // todo normalize map
+            if cost[neighbor] < min_neighbor_cost { // track back closest neighbor
+                min_neighbor_cost = cost[neighbor];
+
+                cost[node] = cost[neighbor] + f32::abs(scene_lock.height[node] - scene_lock.height[neighbor]); // todo normalize map
 
                 ball[node] = ball[neighbor];
 
-                path[node] = min_neighbor;
-
-                let min_neighbor = neighbor;
+                path[node] = neighbor;
             }
             if ball[neighbor] == todo!("was not checked") {
 
                 // PX:    1   2  // For space
                 // BALL: 123 123
                 // FMT: 0 = not checked 1 = checked
-                ball_checked[node] *= u8::pow(2, ball[neighbor] as u32) * u8::pow(8, (min_neighbor % 2) as u32); // TODO fix up. Not the fastest way.
+                ball_checked[node] = ball_checked[node] & u8::pow(2, ball[neighbor] as u32) * u8::pow(8, (neighbor % 2) as u32); // TODO fix up. Not the fastest way.
                 
                 todo!("Stopped here for the night")
             }

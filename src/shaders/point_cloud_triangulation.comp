@@ -1,46 +1,67 @@
 #version 450
 // GLSL img1_read Cloud triangulation
-// An elegant way to simplify the pointcloud.
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-layout(set = 0, binding = 0) uniform sampler2D img1; // All I care about is xyz and class 
-// layout(set = 0, binding = 1) uniform sampler2D img2;
+layout(set = 0, binding = 0) uniform sampler2D depth_and_class; // (z, class, ID, 0) 
 
-layout(set = 0, binding = 2, rgba8) uniform image2D depth; // Not the final output type. This is just so it builds
-layout(set = 0, binding = 3, rgba8) uniform writeonly image2D out_class;
+layout(set = 0, binding = 2, rgba8) uniform writeonly image2D depth;
+layout(location = 0) uniform vec2 out_balls[100];
 
-const float max = 11.5;
+// Image dims
+const uint width = 640;
+const uint height = 480;
 
-// Yolcat implementation has output of 224x224 which unlike 550x550 is conveniently cleanly divisible by 8
-const int img_size = 224; 
+// Nav constants
+const float bot_avoidance_const = 100.0;
+const int bot_norm_const = 20;
+const int terrain_norm_const = 10;
 
 void main() {
-    uvec2 px = gl_GlobalInvocationID.xy;
-    vec4 img1_read = texture(img1, px).xyzw;
-    bool is_bg = img1_read.w == 0;
+    uvec2 img_pos = gl_GlobalInvocationID.xy;    
+    vec3 depth_and_class_read = texture(depth_and_class, img_pos).xyz;
     
-    ivec2 new_pos;
-    if (is_bg) { // None class
-        float inv_depth = max / img1_read.z;
-        new_pos = ivec2(px.xy) - ivec2(px.x % uint(inv_depth), px.y % uint(inv_depth));
-    } else { // Some class
-        ivec2 new_pos = ivec2(int(img1_read.w) % img_size, int(img1_read.w) / img_size); // Set position according to unique class
-    }
+    int depth = int(depth_and_class_read.x); // TODO scale
+    int class = int(depth_and_class_read.y);
+    int id = int(depth_and_class_read.z);
     
-    vec3 depth_read = imageLoad(depth, new_pos).xyz;
+    vec3 real_pos = vec3(0, 0, 0);
 
-    vec4 to_write;
-    if (depth_read.z != 0) { // If there is already a value there average them 
-        // Note this makes the last value added weigh more
-        to_write = vec4((img1_read.xyz + depth_read) / 2.0, 0);
-    } else {
-        to_write = vec4(img1_read.xyz, 0);
+    // action_ty:
+    // 0: follow terrain
+    // 1: avoid // Could differentiate between red and blue robots and alter mound
+    // 2: goal (go to ball)
+    int action_ty = class;
+    if (action_ty != 0) {
+        if (action_ty != 1) {  
+            action_ty -= 1;
+        }
     }
     
-    if (is_bg){
-        imageStore(depth, new_pos, to_write);
-    } else {
-        imageStore(out_class, new_pos, to_write);
+    // For indexing it is best to store a birdseye view (xz)
+    ivec2 new_pos = ivec(real_pos.x, real_pos.z);
+    
+    if (action_ty == 0) { // Terrain
+        norm_img_store(depth, new_pos, real_pos.y, terrain_norm_const);
+    } else if (action_ty == 2) { // Ball 
+        // TODO: instance segmentation set position according to unique id 
+        store_ball(out_ball, id, new_pos);
+    } else { // Robot
+        // dump a mound of prespecified height at the position.
+        // Reasoning: This will essentially make traveling through that position suboptimal and can 
+        // be done in a storage efficient manner. It will essentially automatically 
+        norm_img_store(depth, new_pos, bot_avoidance_const, bot_norm_cost);
     }
+}
+
+int norm_img_store(Image2D img, ivec2 pos, float val, int norm_strength) {
+    // TODO: imageStore(img, pos, val, );
+    return 0;
+}
+
+int store_ball(ivec3[] arr, int id, ivec2 val) {
+    int term = arr[id].z;
+    ivec2 new_val = arr[id].xy * term + val;
+    arr[id] = ivec3(new_val / (term + 1), term + 1);
+    return 0;
 }

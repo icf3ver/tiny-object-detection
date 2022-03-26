@@ -2,20 +2,21 @@
 
 ## Install dependancies:
 ##  + libedgetpu
-##  + Vulakan
+##  + Vulkan
 ##  + OpenNI2
 ##
 ## TODO size estimate
 
 # Check root
-if [ "$EUID" -ne 0 ]; then
+
+if [ "$EUID" -ne 0 ]; then # TODO remove
     echo "Please run as root."
     exit 1
 fi
 
 # upgrade
-echo "Updating packages..."; apt-get update -y
-echo "Upgrading packages..."; apt-get full-upgrade -y
+echo "Updating packages..."; sudo apt-get update -y
+echo "Upgrading packages..."; sudo apt-get full-upgrade -y
 
 if [[ $GITHUB_ACTIONS ]]; then
    CROSSTC="."
@@ -27,7 +28,7 @@ fi
 # + Test lib: https://github.com/google-coral/pycoral.git
 # + Procedure: hard reboot without coral then hard reboot with coral
 # + website: https://coral.ai/docs/accelerator/get-started/#3-run-a-model-on-the-edge-tpu
-echo "Installing clang ..."; apt-get install -y clang
+echo "Installing clang ..."; sudo apt-get install -y clang
 echo "Installing curl ..."; sudo apt install -y curl
 
 sudo apt-get update
@@ -37,60 +38,83 @@ echo "deb https://packages.cloud.google.com/apt coral-edgetpu-stable main" | sud
 
 curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
 
-apt update
-apt full-upgrade
-apt update
+sudo apt update
+sudo apt full-upgrade
+sudo apt update
 
-apt install -y libedgetpu1-std
-apt install -y libedgetpu-dev
+#sudo apt install -y libedgetpu1-max
+#sudo apt install -y libedgetpu-dev
 
 echo "Installing edgetpu library and header files ..."
-git clone https://coral.googlesource.com/edgetpu
-cd edgetpu
-git checkout release-chef
-# TODO clean
 
-cp libedgetpu/libedgetpu_arm64_throttled.so /usr/lib/$CROSSTC/libedgetpu.so >> /dev/null
-cp libedgetpu/edgetpu.h /usr/include/edgetpu.h >> /dev/null
-cd ..
+# compile for edgetpu with --min_runtime_version 13
+$(
+    sudo rm /usr/lib/$CROSSTC/libedgetpu.so
+    sudo rm /usr/lib/$CROSSTC/libedgetpu.so.1
+    sudo rm /usr/lib/$CROSSTC/libedgetpu.so.1.0
 
+    git clone https://github.com/google-coral/edgetpu
+    cd edgetpu
 
-apt remove -y libedgetpu1-std
-apt remove -y libedgetpu-dev
+    sudo cp libedgetpu/edgetpu.h /usr/include/edgetpu.h
+    sudo cp libedgetpu/edgetpu_c.h /usr/include/edgetpu_c.h
 
-apt update
-apt full-upgrade
-apt update
+    sudo cp libedgetpu/direct/armv7a/libedgetpu.so.* /usr/lib/$CROSSTC
+    cd /usr/lib/$CROSSTC
+    sudo ln libedgetpu.so.1.0 libedgetpu.so
+)
 
-apt install -y libedgetpu1-std
-apt install -y libedgetpu-dev
-
-# vulkan dependencies
-echo "Installing Vulkan Packages ..."
-apt-get install -y libxcb-randr0-dev libxrandr-dev
-apt-get install -y libxcb-xinerama0-dev libxinerama-dev libxcursor-dev
-apt-get install -y libxcb-cursor-dev libxkbcommon-dev xutils-dev
-apt-get install -y xutils-dev libpthread-stubs0-dev libpciaccess-dev
-apt-get install -y libffi-dev x11proto-xext-dev libxcb1-dev libxcb-*dev
-apt-get install -y libssl-dev libgnutls28-dev x11proto-dri2-dev
-apt-get install -y x11proto-dri3-dev libx11-dev libxcb-glx0-dev
-apt-get install -y libx11-xcb-dev libxext-dev libxdamage-dev libxfixes-dev
-apt-get install -y libva-dev x11proto-randr-dev x11proto-present-dev
-apt-get install -y libclc-dev libelf-dev mesa-utils
-apt-get install -y libvulkan-dev libvulkan1 libassimp-dev
-apt-get install -y libdrm-dev libxshmfence-dev libxxf86vm-dev libunwind-dev
-apt-get install -y libwayland-dev wayland-protocols
-apt-get install -y libwayland-egl-backend-dev
-apt-get install -y valgrind libzstd-dev vulkan-tools
-apt-get install -y git build-essential bison flex ninja-build
+# Vulkan Dependencies
+echo "Installing Vulkan Dependencies ..."
+sudo apt-get install -y libxcb-randr0-dev libxrandr-dev
+sudo apt-get install -y libxcb-xinerama0-dev libxinerama-dev libxcursor-dev
+sudo apt-get install -y libxcb-cursor-dev libxkbcommon-dev xutils-dev
+sudo apt-get install -y xutils-dev libpthread-stubs0-dev libpciaccess-dev
+sudo apt-get install -y libffi-dev x11proto-xext-dev libxcb1-dev libxcb-*dev
+sudo apt-get install -y libssl-dev libgnutls28-dev x11proto-dri2-dev
+sudo apt-get install -y x11proto-dri3-dev libx11-dev libxcb-glx0-dev
+sudo apt-get install -y libx11-xcb-dev libxext-dev libxdamage-dev libxfixes-dev
+sudo apt-get install -y libva-dev x11proto-randr-dev x11proto-present-dev
+sudo apt-get install -y libclc-dev libelf-dev mesa-utils
+sudo apt-get install -y libvulkan-dev libvulkan1 libassimp-dev
+sudo apt-get install -y libdrm-dev libxshmfence-dev libxxf86vm-dev libunwind-dev
+sudo apt-get install -y libwayland-dev wayland-protocols
+sudo apt-get install -y libwayland-egl-backend-dev
+sudo apt-get install -y valgrind libzstd-dev vulkan-tools
+sudo apt-get install -y git build-essential bison flex ninja-build
 
 VERSION_CODENAME=$(cat /etc/os-release | grep -o 'VERSION_CODENAME.*' | cut -f2- -d=)
 
 if [[ $VERSION_CODENAME == 'buster' ]]; then
-    apt-get install -y python-mako vulkan-utils
+    sudo apt-get install -y python-mako vulkan-utils
 elif [[ $VERSION_CODENAME == 'bullseye' ]]; then
-    apt-get install -y python3-mako
+    sudo apt-get install -y python3-mako
 fi
+
+echo "Installing Vulkan ..."
+# remove old versions first
+sudo rm -rf /home/pi/mesa_vulkan
+# install meson
+sudo apt purge meson -y
+sudo pip3 install meson
+# install mako
+sudo pip3 install mako
+# install v3dv
+cd ~
+git clone -b 20.3 https://gitlab.freedesktop.org/mesa/mesa.git mesa_vulkan
+# build v3dv (± 30 min)
+cd mesa_vulkan
+CFLAGS="-mcpu=cortex-a72 -mfpu=neon-fp-armv8" \
+CXXFLAGS="-mcpu=cortex-a72 -mfpu=neon-fp-armv8" \
+meson --prefix /usr \
+ -D platforms=x11 \
+ -D vulkan-drivers=broadcom \
+ -D dri-drivers= \
+ -D gallium-drivers=kmsro,v3d,vc4 \
+ -D buildtype=release build
+sudo ninja -C build -j4
+ninja -C build install
+echo "TIP: Check your driver using \"glxinfo -B\""
 
 # OpenNI2 dependencies
 sudo apt-get install -y libusb-1.0-0-dev
