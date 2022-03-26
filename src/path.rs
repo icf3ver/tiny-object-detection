@@ -12,21 +12,23 @@ pub(crate) struct Path {
     pub(crate) directions: Vec<(f32, f32)>,
 }
 impl Path {
-    fn serialize(&self) -> [u8; 12] { 
-        todo!()
+    fn serialize(&self) -> Vec<u8> {
+        self.directions.iter().map(|(x, y)| [x.to_be_bytes(), y.to_be_bytes()].concat()).flatten().collect()
     }
 }
 
 /// Modifies the Path with the new scene information
 pub(crate) async fn modify_path(arc_path: Arc<Mutex<Path>>, target_queue: Arc<Mutex<Vec<Target>>>, scene: Arc<Mutex<Scene>>) {
     let mut scene_lock = scene.lock().await;
-    
+
     let mut set = Vec::new(); // TODO use TreeSet (first & last requires nightly)
     let mut path: [usize; 224 * 224] = [usize::MAX - 1; 224 * 224]; // MAX-1 = undefined MAX-2 = target (I do not need u32 size)
     let mut cost: [f32; 224 * 224] = [f32::MAX; 224 * 224]; // Cost to travel from a point
 
-    let mut ball_checked: [u8; 224 * 112] = [0; 224 * 112];
-    let mut ball: [u8; 224 * 56] = [0; 224 * 56];
+    // Commented out optimization
+    //let mut ball_checked: [u8; 224 * 112] = [0; 224 * 112];
+    
+    let mut ball: [u8; 224 * 56] = [0; 224 * 56]; // Use in optimizations and UI
 
     let ball_poss = &scene_lock.balls[..3];
     let dest_nodes = ball_poss.iter().map(|pos| scene_lock.get_nearest_px(*pos)); // closest to target node // Dijkstra's algorithm with 3 targets (yet to choose heuristic)
@@ -34,34 +36,52 @@ pub(crate) async fn modify_path(arc_path: Arc<Mutex<Path>>, target_queue: Arc<Mu
         path[dest_node] = usize::MAX - 2; 
         cost[dest_node] = 0.0; 
         set.push(dest_node);
+
+        // Part of commented out optimizations
+        // PX:    1    2  // For space
+        // BALL: 321_ 321_  // The last value set to one
+        // FMT: 0 = not checked 1 = checked
+        //ball_checked[dest_node] = 17;
     }
     
-    let mut min_neighbor_cost = f32::MAX - 1.0;
+    let mut min_neighbor_cost = f32::MAX;
     while let Some(node) = set.pop() {
-        min_neighbor_cost = f32::MAX - 1.0;
-        for neighbor in (*scene_lock).neighbors(node) {
-            if cost[neighbor] < min_neighbor_cost { // track back closest neighbor
-                min_neighbor_cost = cost[neighbor];
+        //best_ball = ball[node]; // ball 0 has 100% been checked
+        min_neighbor_cost = cost[node];
+        for (cn, neighbor) in (*scene_lock).neighbors(node).into_iter().enumerate() {
+            if cost[neighbor] == f32::MAX {
+                set.push(neighbor);
+            } else {
+                let neighbor_cost = cost[neighbor] + scene_lock.connections[node][cn] + f32::abs(scene_lock.height[node] - scene_lock.height[neighbor]);
+                if neighbor_cost < min_neighbor_cost {
+                    min_neighbor_cost = cost[neighbor];
 
-                cost[node] = cost[neighbor] + f32::abs(scene_lock.height[node] - scene_lock.height[neighbor]); // todo normalize map
+                    cost[node] = neighbor_cost;
 
-                ball[node] = ball[neighbor];
+                    // best_ball = ball[neighbor];
+                    ball[node] = ball[neighbor];
 
-                path[node] = neighbor;
+                    path[node] = neighbor;
+                } 
             }
-            if ball[neighbor] == todo!("was not checked") {
 
-                // PX:    1   2  // For space
-                // BALL: 123 123
-                // FMT: 0 = not checked 1 = checked
+            // PX:    1    2  // For space
+            // BALL: 321_ 321_  // The last value set to one
+            // FMT: 0 = not checked 1 = checked
+            //ball_checked[node] &= (1 << ball[neighbor]) << ((node >> 1 << 1 ^ node) << 2 /* mul 4 */); 
+            // I May be able to use for optimizations
+        }
+        //ball[node] = best_ball; // Commented out optimizations.
 
-                ball_checked[node] = ball_checked[node] & u8::pow(2, ball[neighbor] as u32) * u8::pow(8, (neighbor % 2) as u32); // TODO fix up. Not the fastest way.
-
-                
-                todo!("Stopped here for the night")
-            }
-            if true { // Ball array which has it been checked against solution \/\/
-               set.push(neighbor); // add all neighbors to hurrisric // ISSUE!!! loops back fix with arrays.
+        // TODO: Certain things could be optimized
+        // Commented out: skip nodes with ball[neighbor] = ball[node] // Could obscure paths (Already not perfect)
+        // skip already checked nodes. // Could obscure paths (Already not perfect)
+        // ...
+        // Done: min_neighbor_cost could default to cost[node] rather than f32::MAX
+        // Considering: Positional Optimizations
+        for (cn, neighbor) in (*scene_lock).neighbors(node).into_iter().enumerate() {
+            if cost[neighbor] > min_neighbor_cost + scene_lock.connections[node][cn] + f32::abs(scene_lock.height[node] - scene_lock.height[neighbor]) {
+                set.push(neighbor);
             }
         }
     }

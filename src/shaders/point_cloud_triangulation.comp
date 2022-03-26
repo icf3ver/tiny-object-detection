@@ -55,7 +55,9 @@ void main() {
 }
 
 int norm_img_store(Image2D img, ivec2 pos, float val, int norm_strength) {
-    // TODO: imageStore(img, pos, val, );
+    // For now just a single point store function
+    // TODO: Normalize
+    imageStore(img, pos, val);
     return 0;
 }
 

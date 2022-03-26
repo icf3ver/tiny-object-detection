@@ -27,7 +27,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let scene: Arc<Mutex<Scene>> = Arc::new(Mutex::new(Scene{
        pos: Vec::new(), height: Vec::new(), 
        balls: Vec::new(), 
-       red_robots: Vec::new(), blue_robots: Vec::new()
+       red_robots: Vec::new(), blue_robots: Vec::new(),
+       connections: Vec::new()
     }));
     let path: Arc<Mutex<Path>> = {
         let created = Instant::now();

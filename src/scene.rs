@@ -322,6 +322,10 @@ pub(crate) struct Scene {
     pub(crate) balls: Vec<(f32, f32)>,
     pub(crate) red_robots: Vec<(f32, f32)>,
     pub(crate) blue_robots: Vec<(f32, f32)>,
+
+    // Speed
+    pub(crate) connections: Vec<Vec<f32>>,
+
 }
 
 impl Scene {
