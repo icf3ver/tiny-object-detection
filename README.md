@@ -25,7 +25,7 @@ Pi ICE Tower CPU Cooling Fan <br/>
 Pi 4 Model B Heat Sink Cooling Fan mounted on coral tpu. 
 
 Note: Use unthrottled edgetpu runtime at your own risk.
-Note: I am not libable for any of your damages. (Use at your own risk)
+Note: I am not liable for any of your damages. (Use at your own risk)
 
 # License
 [Apache 2.0](LICENSE.md)
