@@ -325,7 +325,6 @@ pub(crate) struct Scene {
 
     // Speed
     pub(crate) connections: Vec<Vec<f32>>,
-
 }
 
 impl Scene {

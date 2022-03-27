@@ -1,15 +1,15 @@
 #version 450
-// GLSL img1_read Cloud triangulation
+// GLSL Point Cloud Triangulation
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(set = 0, binding = 0) uniform sampler2D depth_and_class; // (z, class, ID, 0)
 
 // Need a vec4 to get through to rust without issues
-layout(set = 0, binding = 2, rgba8) uniform image2D depth;
-// Using float16s (half precission floating points)                          // 0 0 0
-layout(set = 0, binding = 3, rgba16) uniform writeonly image2D connections0; // 0   1
-layout(set = 0, binding = 4, rgba16) uniform writeonly image2D connections1; // 1 1 1
+layout(set = 0, binding = 2, r32f) uniform image2D depth;
+// TODO: May want to use float16s (half precission floating points)      // 1 0 0
+layout(set = 0, binding = 3, rgba32f) uniform /*TODO*/ image2D connections0; // 1   0
+layout(set = 0, binding = 4, rgba32f) uniform /*TODO*/ image2D connections1; // 1 1 0
 
 layout(set = 0, binding = 5) buffer Balls {
     vec4 data[100]; // pos, number, 0 // Need a vec4 to get through to rust without issues
@@ -30,20 +30,76 @@ const int terrain_norm_const = 10;
 int norm_img_store(ivec2 pos, float val, int norm_strength) {
     // For now just a single point store function
     // TODO: Normalize
-    imageStore(depth, pos, vec4(val, 0, 0, 0));
+    imageStore(depth, pos, vec4(val));
     return 0;
 }
 
-int connections_store(ivec2 new_pos) { 
-    // TODO: Not just writeonly
-    
-    // 0 0 0
-    // 0
-    connections0; // TODO
+/* // TODO: finish alg
+float dist (float encoded_pos, ivec2 other_pos) {
+    // TODO
+    return 0.0;
+}
+*/
 
-    //     1
-    // 1 1 1
-    connections1; // TODO
+int connections_store(ivec2 pos) { /*
+    // TODO:
+    // Note: Pos storage considerations
+    // Note: How to make neighbor always exist
+    // Note: Does not account for edges yet.
+
+    // NEED AN RWLOCK
+    //  + Multiple reads one WRITE
+    //  + Capable of awaiting release
+    // TOTEST: coherent
+    // https://www.khronos.org/opengl/wiki/Image_Load_Store#Memory_qualifiers
+    // https://www.khronos.org/opengl/wiki/Memory_Model#Ensuring_visibility
+
+    float encoded_pos; // TODO: Encoding and decoding
+
+    // See shaders/parallel_connections_algorithm.txt
+
+    // Stage 1 v2: // Share dist
+    connections0_lock = lock connections0[]; // forces another node to wait for this node to finish storing before another node can take
+
+    vec4 c0s = vec4(position_encoded; 4);
+    imageStore(connections0_lock, pos, c0s);
+
+    release connections0_lock;
+
+    // Stage 2 v2:
+    connections1_lock = lock connections1[pos.1]; // forces wait for node to finish sharing data to connections 
+
+    // 1 0 0  // 3 # #  // # 0 1
+    // 1   0  // 2   #  // #   2
+    // 1 1 0  // 1 0 #  // # # 3
+
+    // dims: top left = origin // glsl also likes column major
+    // index in connections1 = oposite index in connections0 arr
+    vec4 c1s = vec4( 
+        dist(connections0[pos.x][pos.y+1].r, pos), 
+        dist(connections0[pos.x-1][pos.y+1].g, pos),
+        dist(connections0[pos.x-1][pos.y].b, pos),
+        dist(connections0[pos.x-1][pos.y-1].a, pos)
+    );
+    imageStore(connections1_lock, pos, c1s);
+
+    release connections1_lock;
+
+    // Stage 3 v2:
+    // No connections0 lock needed for anything but write access (no blocking)
+    connections0_lock = lock connections0[];
+    
+    vec4 c0s = vec4(
+        connections1[pos.x][pos.y-1].r, 
+        connections1[pos.x+1][pos.y-1].g,
+        connections1[pos.x+1][pos.y].b, 
+        connections1[pos.x+1][pos.y+1].a
+    );
+    imageStore(connections0_lock, pos, c0s);
+
+    release connections0_lock; 
+    
+    */ // TODO finish alg
 
     return 0;
 }
