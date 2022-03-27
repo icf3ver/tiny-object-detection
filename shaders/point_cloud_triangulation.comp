@@ -1,0 +1,94 @@
+#version 450
+// GLSL img1_read Cloud triangulation
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D depth_and_class; // (z, class, ID, 0)
+
+// Need a vec4 to get through to rust without issues
+layout(set = 0, binding = 2, rgba8) uniform image2D depth;
+// Using float16s (half precission floating points)                          // 0 0 0
+layout(set = 0, binding = 3, rgba16) uniform writeonly image2D connections0; // 0   1
+layout(set = 0, binding = 4, rgba16) uniform writeonly image2D connections1; // 1 1 1
+
+layout(set = 0, binding = 5) buffer Balls {
+    vec4 data[100]; // pos, number, 0 // Need a vec4 to get through to rust without issues
+    // pos: The a center of the ball
+    // number: How many pixels have gone into the average pos (Needed for averaging)
+} out_balls;
+
+// Image dims
+const uint width = 640;
+const uint height = 480;
+
+// Nav constants
+const float bot_avoidance_const = 100.0;
+const int bot_norm_const = 20;
+const int terrain_norm_const = 10;
+
+
+int norm_img_store(ivec2 pos, float val, int norm_strength) {
+    // For now just a single point store function
+    // TODO: Normalize
+    imageStore(depth, pos, vec4(val, 0, 0, 0));
+    return 0;
+}
+
+int connections_store(ivec2 new_pos) { 
+    // TODO: Not just writeonly
+    
+    // 0 0 0
+    // 0
+    connections0; // TODO
+
+    //     1
+    // 1 1 1
+    connections1; // TODO
+
+    return 0;
+}
+
+int store_ball(int id, ivec2 val) {
+    float term = out_balls.data[id].z;
+    vec2 new_val = out_balls.data[id].xy * term + val;
+    out_balls.data[id] = vec4(new_val / (term + 1), term + 1, 0);
+    return 0;
+}
+
+void main() {
+    uvec2 img_pos = gl_GlobalInvocationID.xy;
+    vec3 depth_and_class_read = texture(depth_and_class, img_pos).xyz;
+
+    int depth = int(depth_and_class_read.x); // TODO scale
+    int cls = int(depth_and_class_read.y);
+    int id = int(depth_and_class_read.z);
+
+    vec3 real_pos = vec3(0, 0, 0);
+
+    // action_ty:
+    // 0: follow terrain
+    // 1: avoid // Could differentiate between red and blue robots and alter mound
+    // 2: goal (go to ball)
+    int action_ty = cls;
+    if (action_ty != 0) {
+        if (action_ty != 1) {
+            action_ty -= 1;
+        }
+    }
+
+    // For indexing it is best to store a birdseye view (xz)
+    ivec2 new_pos = ivec2(real_pos.x, real_pos.z);
+
+    if (action_ty == 0) { // Terrain
+        norm_img_store(new_pos, real_pos.y, terrain_norm_const);
+        connections_store(new_pos);
+    } else if (action_ty == 2) { // Ball
+        // TODO: instance segmentation set position according to unique id
+        store_ball(id, new_pos);
+    } else { // Robot
+        // dump a mound of prespecified height at the position.
+        // Reasoning: This will essentially make traveling through that position suboptimal and can
+        // be done in a storage efficient manner. It will essentially automatically
+        norm_img_store(new_pos, bot_avoidance_const, bot_norm_const);
+    }
+}

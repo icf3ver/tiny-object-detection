@@ -336,7 +336,7 @@ impl Scene {
       todo!()
    }
 }
-/*
+
 /// Builds on understanding of scene
 /// Will Put PointCloud through a Point Cloud triangulation compute shader
 pub(crate) async fn append_scene((point_cloud_queue, target_buffer_queue, not_empty): (Arc<Mutex<Vec<[u16; 640 * 480]>>>, Arc<Mutex<Vec<[u16; 640 * 480]>>>, &mut Receiver<()>), scene: Arc<Mutex<Scene>>) {
@@ -507,4 +507,3 @@ pub(crate) async fn append_scene((point_cloud_queue, target_buffer_queue, not_em
     let mut scene_lock = scene.lock().await;
     //scene_lock.from(new_scene_data);
 }
-*/
