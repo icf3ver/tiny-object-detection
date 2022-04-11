@@ -13,7 +13,7 @@ pub(crate) struct Path {
 }
 impl Path {
     fn serialize(&self) -> Vec<u8> {
-        self.directions.iter().map(|(x, y)| [x.to_be_bytes(), y.to_be_bytes()].concat()).flatten().collect()
+        self.directions.iter().map(|(m, r)| [m.to_be_bytes(), r.to_be_bytes()].concat()).flatten().collect()
     }
 }
 
@@ -31,8 +31,8 @@ pub(crate) async fn modify_path(arc_path: Arc<Mutex<Path>>, target_queue: Arc<Mu
     let mut ball: [u8; 224 * 56] = [0; 224 * 56]; // Use in optimizations and UI
 
     let ball_poss = &scene_lock.balls[..3];
-    let dest_nodes = ball_poss.iter().map(|pos| scene_lock.get_nearest_px(*pos)); // closest to target node // Dijkstra's algorithm with 3 targets (yet to choose heuristic)
-    for dest_node in dest_nodes { 
+    let dest_nodes = ball_poss.iter().map(|pos| pos.0 as usize + pos.1 as usize * 480); // closest to target node // Dijkstra's algorithm with 3 targets (yet to choose heuristic)
+    for dest_node in dest_nodes {
         path[dest_node] = usize::MAX - 2; 
         cost[dest_node] = 0.0; 
         set.push(dest_node);
@@ -88,10 +88,22 @@ pub(crate) async fn modify_path(arc_path: Arc<Mutex<Path>>, target_queue: Arc<Mu
 
     const start_node: usize = 0; // TODO calibrate
     let mut new_path = Vec::new();
+    let mut last_node = start_node;
     let mut node = start_node;
-    while node != usize::MAX - 2 { 
-        new_path.push(scene_lock.pos[node]);
+    let mut rotation = 0.0;
+    while node != usize::MAX - 2 {
+        let magnitude = cost[node] - cost[path[node]];
+        new_path.push((magnitude, rotation));
+
+        last_node = node;
         node = path[node];
+
+        let pt1 = scene_lock.pos[last_node];
+        let pt2 = scene_lock.pos[node];
+        let pt3 = scene_lock.pos[path[node]];
+        let a = (pt1.0 - pt2.0, pt1.1 - pt2.1);
+        let b = (pt3.0 - pt2.0, pt3.1 - pt2.1);
+        rotation = f32::acos((a.0*b.0 + a.1*b.1) / (f32::sqrt(a.0*a.0+a.1*a.1) * f32::sqrt(b.0*b.0+b.1*b.1)));
     }
 
     drop(scene_lock);

@@ -1,0 +1,106 @@
+#version 450
+
+layout(local_size_x = 640, local_size_y = 480, local_size_z = 1) in;
+
+// Map is only for indexing. (Atomic ops can only be performed on r32ui or r32i)
+layout(set = 0, binding = 2, r32ui) uniform readonly uimage2D map;
+// Real Position
+layout(set = 0, binding = 3, rgba32f) uniform coherent image2D world; // .a stores nothing
+
+// Weight of the connections. (Formatted for fast indexing)                  // 1 0 0
+layout(set = 0, binding = 6, rgba32f) uniform coherent image2D connections0; // 1   0
+layout(set = 0, binding = 7, rgba32f) uniform coherent image2D connections1; // 1 1 0
+
+// Image dims
+const uint width = 640;
+const uint height = 480;
+const uint depth_range = 10000; // realsense uses mm (max is stated to be 10m)
+
+// ±3 deg
+const float x_fov = 1.51843644924; // 87 deg 
+const float y_fov = 1.01229096616; // 58 deg
+
+float float_int_repr(uint y, uint max) { 
+    return float(y) * float(max) / 4294967295.0;
+}
+
+// note vec2 not ivec2
+float pack(uint x, uint y) {
+    return float(x << 16 & y);
+}
+vec3 unpack(float encoded_pos){
+    uint x = uint(encoded_pos) >> 16;
+    uint y = uint(encoded_pos) << 16 >> 16;
+
+    return vec3(imageLoad(world, ivec2(x, y)).rgb);
+}
+
+float dist (vec3 pos, vec3 other_pos) {
+    return sqrt(
+        pow(pos.x - other_pos.x, 2) + 
+        pow(pos.y - other_pos.y, 2) + 
+        pow(pos.z - other_pos.z, 2)
+    );
+}
+
+void main() {
+    ivec2 img_pos = ivec2(gl_GlobalInvocationID.xy);
+    float depth = float_int_repr(imageLoad(map, img_pos).x, height);
+
+    // real world pos
+    vec3 imgwrld_pos = vec3(img_pos.x, depth, img_pos.y);
+
+    mat3 imProj = mat3(
+        1, 0, 0,
+        0, 1, 0,
+        0, 0, 1
+    );
+
+    vec3 wrld_pos = imProj * imgwrld_pos;
+
+    imageStore(world, img_pos, vec4(wrld_pos, 0.0));
+
+    // TODO:
+    // Note: Pos storage considerations
+    // Note: How to make neighbor always exist
+    // Note: Does not account for edges yet.
+
+    float encoded_pos = pack(img_pos.x, img_pos.y);
+
+    // See shaders/parallel_connections_algorithm.txt
+    // Stage 1 v2: // Share dist
+    vec4 c0s = vec4(encoded_pos);
+    imageStore(connections0, img_pos, c0s);
+
+    // Stage 2 v2:
+    vec4 buf = vec4(0.0, 0.0, 0.0, 0.0);
+    while (buf.r == 0.0) { buf.r = imageLoad(connections0, ivec2(img_pos.x, img_pos.y+1)).r; }
+    while (buf.g == 0.0) { buf.g = imageLoad(connections0, ivec2(img_pos.x-1, img_pos.y+1)).g; }
+    while (buf.b == 0.0) { buf.b = imageLoad(connections0, ivec2(img_pos.x-1, img_pos.y)).b; }
+    while (buf.a != 0.0) { buf.a = imageLoad(connections0, ivec2(img_pos.x-1, img_pos.y-1)).a; } // DC err
+    // forces this thread to weight for its neighbors
+
+    // 1 0 0  // 3 # #  // # 0 1
+    // 1   0  // 2   #  // #   2
+    // 1 1 0  // 1 0 #  // # # 3
+
+    // dims: top left = origin // glsl also likes column major
+    // index in connections1 = oposite index in connections0 arr
+    vec4 c1s = vec4(
+        dist(wrld_pos, unpack(buf.r)),
+        dist(wrld_pos, unpack(buf.g)),
+        dist(wrld_pos, unpack(buf.b)),
+        dist(wrld_pos, unpack(buf.a))
+    );
+    imageStore(connections1, img_pos, c1s);
+
+    // Stage 3 v2:
+    vec4 c0s_buf = vec4(-1.0, -1.0, -1.0, -1.0);
+    // TODO encoding function that stores with negative
+    while (c0s_buf.r <= 0.0) { c0s_buf.r = imageLoad(connections1, ivec2(img_pos.x, img_pos.y-1)).r; }
+    while (c0s_buf.g <= 0.0) { c0s_buf.g = imageLoad(connections1, ivec2(img_pos.x+1, img_pos.y-1)).g; }
+    while (c0s_buf.b <= 0.0) { c0s_buf.b = imageLoad(connections1, ivec2(img_pos.x+1, img_pos.y)).b; }
+    while (c0s_buf.a <= 0.0) { c0s_buf.a = imageLoad(connections1, ivec2(img_pos.x+1, img_pos.y+1)).a; }
+    // forces this thread to weight for its neighbors
+    imageStore(connections0, img_pos, c0s_buf);
+}

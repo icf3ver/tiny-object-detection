@@ -4,6 +4,12 @@
 
 Pi edition. Not production yet.
 
+# Competition version
+Unfortunately I misconfigured the train and am only just barely able to trust the masks and model as an instance segmentation model. There is no way I will be able to repair this in the time I have left so instead I have tried to work around it for the time being.
+
+Make sure to `export DISPLAY=:0` if there is no screen.
+Bug: run without glsl shader and then with to get it to work ?!
+
 # Requirements
 Pi 8GB (Tested on Pi 4 Model B 8GB)
 

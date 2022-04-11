@@ -30,6 +30,8 @@ use openni2::Frame;
 use openni2::{OniRGB888Pixel, OniDepthPixel};
 use crate::scene::tflite::Interpreter;
 
+use vulkano::descriptor_set::WriteDescriptorSet;
+
 use std::convert::TryInto;
 use std::borrow::Cow;
 use core::array::IntoIter;
@@ -63,10 +65,51 @@ struct Image {
     data: Vec<u8>, //Bytes,
 }
 
+/// I don't have time to finish postprocessing so this will need to do for now
+fn terrible_id (img: Vec<u8>) -> Vec<i8> {
+    // Only run this on balls: For now it is the only item that needs unique ids
+    let mut out = [-1; 28 * 28].to_vec();
+    let mut id = -1;
+
+    fn flood_fill(out: &mut Vec<i8>, start: usize, id: i8, img: &Vec<u8>) {
+        let mut set = vec![start];
+        
+        let start_pos = 0;
+        while let Some(px) = set.pop() {
+            if img.get(px - 1) == Some(&3) {
+                out[px - 1] = id;
+                set.push(px - 1);
+            }
+            if img.get(px + 1) == Some(&3) {
+                out[px + 1] = id;
+                set.push(px + 1);
+            }
+            if img.get(px - 28) == Some(&3) {
+                out[px - 28] = id;
+                set.push(px - 28);
+            }
+            if img.get(px + 28) == Some(&3) {
+                out[px + 28] = id;
+                set.push(px + 28);
+            }
+        }
+    }
+
+    for (px, class) in img.iter().cloned().enumerate() {
+        if class == 3 && out[px] == -1 {
+            id += 1;
+            flood_fill(&mut out, px, id, &img);
+        }
+    }
+    
+    out
+}
+
 fn postprocess<'a>(results: Vec<Vec<f32>>) -> [u32; 224 * 224] {
     let dets = &results[4]; // first detection
 
-    // I only am interested in the masks for now
+    // I only am interested in the prototype masks for now 
+    // (Not enough time or resources to complete the yolact detection cleanup implementation)
     // Right now this is essentially semantic segmentation
 
     /*
@@ -92,15 +135,17 @@ fn postprocess<'a>(results: Vec<Vec<f32>>) -> [u32; 224 * 224] {
         }
     }).collect::<Vec<u8>>().as_slice().try_into().unwrap();
 
+    let mut ids = terrible_id(Vec::from(classes));
+
     /*for chunk in classes.as_slice().chunks(28).collect::<Vec<&[u8]>>().iter() {
         println!("{:?}", chunk);
     }*/ // Debugging model
 
-    // TODO use confidence to shape mask
-    let sample: [u32; 224 * 224] = classes.iter().map(|cls| [*cls as u32; 8]).flatten().collect::<Vec<u32>>().as_slice()
+    // TODO use confidence to shape mask // Note id: 0 is a ball id and the none id
+    let sample: [u32; 224 * 224] = classes.iter().zip(&mut ids.into_iter()).map(|(cls, id)| [((*cls as u32) << 24 & (id as u32) << 16); 8]).flatten().collect::<Vec<u32>>().as_slice()
         .chunks(224).map(|chunk| [chunk; 8]).flatten().flatten().map(|r| *r).collect::<Vec<u32>>().try_into().unwrap();
 
-    return sample;
+    sample
 }
 
 fn classify_tile<'a>(frame_buffer: &mut [u32], interpreter: &mut Interpreter<'a, &'a BuiltinOpResolver>) {
@@ -208,7 +253,7 @@ fn classify<'a>(frame_buffer: &mut [u32], interpreter: &mut Interpreter<'a, &'a 
 
     let image = image::DynamicImage::ImageRgb8(ImageBuffer::from_vec(448, 224, data).unwrap());
     let class_be = image.resize_exact(640, 480, image::imageops::FilterType::Triangle).as_bytes()
-    .chunks(3).map(|chunk| u32::from_be_bytes([chunk[0], chunk[1], chunk[2], 0])).collect::<Vec<u32>>();
+        .chunks(3).map(|chunk| u32::from_be_bytes([chunk[0], chunk[1], chunk[2], 0])).collect::<Vec<u32>>();
     frame_buffer.copy_from_slice(&class_be);
 }
 
@@ -315,31 +360,31 @@ pub(crate) async fn process_scene((point_cloud_queue, target_buffer_queue, not_e
 
 pub(crate) struct Scene {
     // pub(crate) map: Vec<(f32, f32, f32)>
-    pub(crate) pos: Vec<(f32, f32)>,
-    pub(crate) height: Vec<f32>,
+    pub(crate) height: Vec<f32>, // index image
+    pub(crate) pos: Vec<(f32, f32, f32)>, // The true positions of the pixels
 
     // Entities
-    pub(crate) balls: Vec<(f32, f32)>,
-    pub(crate) red_robots: Vec<(f32, f32)>,
-    pub(crate) blue_robots: Vec<(f32, f32)>,
+    pub(crate) balls: Vec<(i32, i32)>,
 
     // Speed
-    pub(crate) connections: Vec<Vec<f32>>,
+    pub(crate) connections: Vec<[f32; 8]>,
 }
 
 impl Scene {
-   pub(crate) fn get_nearest_px(&self, pos: (f32, f32)) -> usize {
-      todo!()
-   }
-   pub(crate) fn neighbors(&self, px: usize) -> Vec<usize> {
-      todo!()
-   }
+    pub(crate) fn neighbors(&self, px: usize) -> Vec<usize> {
+        let mut out = Vec::new();
+        if px > 0 { out.push(px - 1); }
+        if px < 680 * 480 - 1 { out.push(px + 1); }
+        if px / 640 > 0 { out.push(px - 640); }
+        if px / 640 < 480 - 1 { out.push(px + 640); }
+        out
+    }
 }
 
 /// Builds on understanding of scene
 /// Will Put PointCloud through a Point Cloud triangulation compute shader
 pub(crate) async fn append_scene((point_cloud_queue, target_buffer_queue, not_empty): (Arc<Mutex<Vec<[u16; 640 * 480]>>>, Arc<Mutex<Vec<[u16; 640 * 480]>>>, &mut Receiver<()>), scene: Arc<Mutex<Scene>>) {
-    let instance = Instance::new(
+    let instance = Instance::new( // export DISPLAY=:0 over ssh
         None,
         Version::default(),
         &InstanceExtensions::none(),
@@ -348,11 +393,13 @@ pub(crate) async fn append_scene((point_cloud_queue, target_buffer_queue, not_em
 
     let physical = PhysicalDevice::enumerate(&instance).next().unwrap();
 
+    // println!("{:?}", physical.supported_features());
+
     let queue_family = physical.queue_families()
         .find(|&q| q.supports_compute()).unwrap();
 
     let device_ext = DeviceExtensions{
-        khr_storage_buffer_storage_class: true,
+        // khr_storage_buffer_storage_class: true,
         ..DeviceExtensions::none()
     };
 
@@ -367,142 +414,243 @@ pub(crate) async fn append_scene((point_cloud_queue, target_buffer_queue, not_em
 
     // TODO: Remnants of last shader
 
-    let image = StorageImage::new(
+    let map_image = StorageImage::new(
         device.clone(),
         ImageDimensions::Dim2d {
             width: 640,
             height: 480,
             array_layers: 1,
         },
-        Format::R8G8B8A8_UNORM,
+        Format::R32_UINT,
+        Some(queue.family())
+    ).unwrap();
+    let world_image = StorageImage::new(
+        device.clone(),
+        ImageDimensions::Dim2d {
+            width: 640,
+            height: 480,
+            array_layers: 1,
+        },
+        Format::R32G32B32A32_SFLOAT,
+        Some(queue.family())
+    ).unwrap();
+    let connections0_image = StorageImage::new(
+        device.clone(),
+        ImageDimensions::Dim2d {
+            width: 640,
+            height: 480,
+            array_layers: 1,
+        },
+        Format::R32G32B32A32_SFLOAT,
+        Some(queue.family())
+    ).unwrap();
+    let connections1_image = StorageImage::new(
+        device.clone(),
+        ImageDimensions::Dim2d {
+            width: 640,
+            height: 480,
+            array_layers: 1,
+        },
+        Format::R32G32B32A32_SFLOAT,
         Some(queue.family())
     ).unwrap();
 
-    let sampler_img1 = Sampler::new(
-        device.clone(),
-        Filter::Nearest,
-        Filter::Nearest,
-        vulkano::sampler::MipmapMode::Nearest,
-        SamplerAddressMode::ClampToEdge,
-        SamplerAddressMode::ClampToEdge,
-        SamplerAddressMode::ClampToEdge,
-        0.0,
-        1.0,
-        0.0,
-        0.0
-    ).unwrap();
-    let sampler_img2 = Sampler::new(
-        device.clone(),
-        Filter::Nearest,
-        Filter::Nearest,
-        vulkano::sampler::MipmapMode::Nearest,
-        SamplerAddressMode::ClampToEdge,
-        SamplerAddressMode::ClampToEdge,
-        SamplerAddressMode::ClampToEdge,
-        0.0,
-        1.0,
-        0.0,
-        0.0
-    ).unwrap();
+    let sampler_depth_img = Sampler::simple_repeat_linear_no_mipmap(device.clone()).unwrap();
+    let sampler_class_img = Sampler::simple_repeat_linear_no_mipmap(device.clone()).unwrap();
 
-    let fractal_shader = crate::cs::load(device.clone()).expect("failed to create shader");
+    let point_cloud_triangulation_shader = crate::cs_triang::load(device.clone()).expect("failed to create shader");
+    let parallel_weights_calculation_shader = crate::cs_weight::load(device.clone()).expect("failed to create shader");
 
-    let compute_pipeline = ComputePipeline::new(
+    let compute_pipeline1 = ComputePipeline::new(
             device.clone(),
-            fractal_shader.entry_point("main").unwrap(),
+            point_cloud_triangulation_shader.entry_point("main").unwrap(),
             &(),
             None,
             |_| {}
         ).unwrap();
+    let compute_pipeline2 = ComputePipeline::new(
+            device.clone(),
+            parallel_weights_calculation_shader.entry_point("main").unwrap(),
+            &(),
+            None,
+            |_| {}
+        ).unwrap();
+    
+    let layout_p1 = compute_pipeline1.layout().descriptor_set_layouts().get(0).unwrap();
+    let layout_p2 = compute_pipeline2.layout().descriptor_set_layouts().get(0).unwrap();
 
-    let layout = compute_pipeline.layout().descriptor_set_layouts().get(0).unwrap();
+    // wait for there to be something to pop
+    if point_cloud_queue.lock().await.len() == 0 { not_empty.recv().await; }
 
     let (mut point_cloud_queue_lock, mut target_buffer_queue_lock) = join!(point_cloud_queue.lock(), target_buffer_queue.lock());
-    let color_depth_buffer = point_cloud_queue_lock.pop().unwrap();
-    let target_buffer = target_buffer_queue_lock.pop().unwrap();
-    drop(point_cloud_queue_lock);
-    drop(target_buffer_queue_lock);
+    let color_depth_buffer = point_cloud_queue_lock.pop().unwrap().to_vec(); // TODO color
+    let target_buffer = target_buffer_queue_lock.pop().unwrap().to_vec();
+    // drop(point_cloud_queue_lock);
+    // drop(target_buffer_queue_lock);
+
+    let ball_buffer = CpuAccessibleBuffer::from_iter(device.clone(), BufferUsage::all(), true, [[0.0,0.0,0.0,0.0]; 100]).unwrap();    
 
     let dimensions = ImageDimensions::Dim2d {
         width: 640,
         height: 480,
         array_layers: 1
     };
-    let (color_depth_img, gpufuture_color_depth) = ImmutableImage::from_iter(
+
+    let (depth_img, gpufuture_depth) = ImmutableImage::from_iter(
             color_depth_buffer.iter().cloned(),
             dimensions,
             MipmapsCount::One,
-            Format::R8G8B8A8_SRGB,
+            Format::R8G8_SNORM, // TOO small at the moment
             queue.clone(),
         ).unwrap();
-    let (target_img, gpufuture_target) = ImmutableImage::from_iter(
+    let (class_img, gpufuture_class) = ImmutableImage::from_iter(
             target_buffer.iter().cloned(),
             dimensions,
             MipmapsCount::One,
-            Format::R8G8B8A8_SRGB,
+            Format::R8G8_SNORM, // TOO small at the moment
             queue.clone(),
         ).unwrap();
 
-    let imgview_color_depth = ImageView::new(color_depth_img).unwrap();
-    let imgview_target = ImageView::new(target_img).unwrap();
+    let imgview_depth = ImageView::new(depth_img).unwrap();
+    let imgview_class = ImageView::new(class_img).unwrap();
 
-    let mut set = PersistentDescriptorSet::start(layout.clone());
-    let set = set
-        .add_sampled_image(imgview_color_depth, sampler_img1).unwrap()
-        .add_sampled_image(imgview_target, sampler_img2).unwrap()
-        .add_image(ImageView::new(image.clone()).unwrap()).unwrap();
-    let set = todo!("build"); //(&set).build();
+    let map_view1 = ImageView::new(map_image.clone()).unwrap();
+    
+    let map_view2 = ImageView::new(map_image.clone()).unwrap();
+    let world_view = ImageView::new(world_image.clone()).unwrap();
+    let connections0_view = ImageView::new(connections0_image.clone()).unwrap();
+    let connections1_view = ImageView::new(connections1_image.clone()).unwrap();
 
-    let dest = CpuAccessibleBuffer::from_iter(
+    let set1 = PersistentDescriptorSet::new(
+        layout_p1.clone(),
+        [
+            WriteDescriptorSet::image_view_sampler(0, imgview_depth, sampler_depth_img),
+            WriteDescriptorSet::image_view_sampler(1, imgview_class, sampler_class_img),
+
+            WriteDescriptorSet::image_view(2, map_view1.clone()),
+            // WriteDescriptorSet::image_view(3, connections0_view.clone()),
+            // WriteDescriptorSet::image_view(4, connections1_view.clone()),
+
+            WriteDescriptorSet::buffer(3, ball_buffer.clone()), // TODO buffer array
+        ]
+    ).unwrap();
+    let set2 = PersistentDescriptorSet::new(
+        layout_p2.clone(),
+        [
+            WriteDescriptorSet::image_view(2, map_view2),
+            WriteDescriptorSet::image_view(3, world_view),
+            WriteDescriptorSet::image_view(6, connections0_view),
+            WriteDescriptorSet::image_view(7, connections1_view),
+        ]
+    ).unwrap();
+
+    let map_dest = CpuAccessibleBuffer::from_iter(
         device.clone(),
         BufferUsage::all(),
         false,
-        (0 .. 640 * 480 * 4).map(|_| 0u8)
+        (0 .. 640 * 480).map(|_| 0_u32) // or i32
+    ).expect("failed to create buffer");
+    let world_dest = CpuAccessibleBuffer::from_iter(
+        device.clone(),
+        BufferUsage::all(),
+        false,
+        (0 .. 640 * 480 * 4).map(|_| 0.0_f32)
+    ).expect("failed to create buffer");
+    let connections0_dest = CpuAccessibleBuffer::from_iter(
+        device.clone(),
+        BufferUsage::all(),
+        false,
+        (0 .. 640 * 480 * 4).map(|_| 0.0_f32)
+    ).expect("failed to create buffer");
+    let connections1_dest = CpuAccessibleBuffer::from_iter(
+        device.clone(),
+        BufferUsage::all(),
+        false,
+        (0 .. 640 * 480 * 4).map(|_| 0.0_f32)
     ).expect("failed to create buffer");
 
     let mut builder = AutoCommandBufferBuilder::primary(
-        device.clone(),
-        queue.family(),
+        device.clone(), queue.family(), 
         CommandBufferUsage::MultipleSubmit,
     ).unwrap();
-
-    // wait for there to be something to pop
-    if point_cloud_queue.lock().await.len() == 0 { not_empty.recv().await; }
-
+    println!("Getting there");
     builder
-        .bind_pipeline_compute(compute_pipeline.clone())
+        .bind_pipeline_compute(compute_pipeline1.clone())
         .bind_descriptor_sets(
             PipelineBindPoint::Compute,
-            compute_pipeline.layout().clone(),
+            compute_pipeline1.layout().clone(),
             0,
-            todo!() //set//.clone()
-        )
-        .dispatch([640 / 8, 480 / 8, 1]).unwrap()
-        .copy_image_to_buffer(
-            image.clone(),
-            dest.clone()
-        ).unwrap();
+            set1
+        ).dispatch([640 / 8, 480 / 8, 1]).unwrap(); // Errors
+    // thread 'main' panicked at 'called `Option::unwrap()` on a `None` value', /home/.../vulkano-0.28.0/src/descriptor_set/mod.rs:433:33
+    println!("Debug");
+
     let command_buffer = builder.build().unwrap();
 
     command_buffer.execute(queue.clone()).unwrap()
         .then_signal_fence_and_flush().unwrap()
         .wait(None).unwrap();
+    
+    let mut builder = AutoCommandBufferBuilder::primary(
+        device.clone(), queue.family(), 
+        CommandBufferUsage::MultipleSubmit,
+    ).unwrap();
+    builder
+        .bind_pipeline_compute(compute_pipeline2.clone())
+        .bind_descriptor_sets(
+            PipelineBindPoint::Compute,
+            compute_pipeline2.layout().clone(),
+            0,
+            set2
+        ).dispatch([640, 480, 1]).unwrap()
+        .copy_image_to_buffer(
+            map_image.clone(),
+            map_dest.clone()
+        ).unwrap()
+        .copy_image_to_buffer(
+            world_image.clone(),
+            world_dest.clone()
+        ).unwrap()
+        .copy_image_to_buffer(
+            connections0_image.clone(),
+            connections0_dest.clone()
+        ).unwrap() // TODO use copy_image_to_buffer_dimensions
+        .copy_image_to_buffer(
+            connections1_image.clone(),
+            connections1_dest.clone()
+        ).unwrap();
 
-    // let buffer_content = dest.read().unwrap();
-    // let scene_image = ImageBuffer::<Rgba<u8>, _>::from_raw(320, 240, &buffer_content[..]).unwrap();
 
-    let buffer_content = dest.read().unwrap();
-    let scene_image = ImageBuffer::<Rgba<u8>, _>::from_raw(640, 480, &buffer_content[..]).unwrap();
-    let filtered_scene_image = scene_image;
+    let command_buffer = builder.build().unwrap();
 
-    #[inline]
-    fn decode(px: [u8; 4]) -> (f32, f32, f32){
-        // 4 bytes = 32 bits = 10.66 bits per dimension = 1024 values per dimension but if we agree to 1/z being stored we get a lot more accuracy from the points that matter
-        (0.0, 0.0, 0.0)
-    }
-    // Pretransformed to position via giro input
-    let new_scene_data = filtered_scene_image.pixels().map(|px| decode(px.0));
+    command_buffer.execute(queue.clone()).unwrap()
+        .then_signal_fence_and_flush().unwrap()
+        .wait(None).unwrap();
+    
+    println!("Done");
+    
+    let height_map_read = map_dest.read().unwrap();
+    let world_read = world_dest.read().unwrap();
+    let ball_buffer_read = ball_buffer.read().unwrap();
+
+    let connections = connections0_dest.read().unwrap()[..].chunks(4).into_iter()
+        .zip(&mut connections1_dest.read().unwrap()[..].chunks(4).into_iter())
+        .map(|(c1, c2)| [c1[0], c1[1], c1[2], c1[3], c2[0], c2[1], c2[2], c2[3]])
+        .collect::<Vec<[f32; 8]>>();
 
     let mut scene_lock = scene.lock().await;
-    //scene_lock.from(new_scene_data);
+    *scene_lock = Scene {
+        height: height_map_read[..].into_iter()
+                .map(|i| *i as f32 * 480.0 / 4294967295.0 )
+                .collect::<Vec<f32>>(),
+        pos: world_read[..].chunks(4)
+                .map(|chunk| (chunk[0], chunk[1], chunk[2]))
+                .collect::<Vec<(f32, f32, f32)>>(),
+
+        balls: ball_buffer_read[..].into_iter()
+                .map(|chunk| (chunk[0] as i32, chunk[1] as i32))
+                .collect::<Vec<(i32, i32)>>(),
+        
+        connections,
+    };
 }

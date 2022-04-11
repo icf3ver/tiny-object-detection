@@ -1,17 +1,18 @@
 #version 450
 // GLSL Point Cloud Triangulation
 
+// Issue should wait for all other points to be finished
+// Borders
+
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-layout(set = 0, binding = 0) uniform sampler2D depth_and_class; // (z, class, ID, 0)
+layout(set = 0, binding = 0) uniform sampler2D depth_samp; // (z, 0, 0, 0)
+layout(set = 0, binding = 1) uniform sampler2D class_samp; // (class, ID, 0, 0)
 
 // Need a vec4 to get through to rust without issues
-layout(set = 0, binding = 2, r32f) uniform image2D depth;
-// TODO: May want to use float16s (half precission floating points)      // 1 0 0
-layout(set = 0, binding = 3, rgba32f) uniform /*TODO*/ image2D connections0; // 1   0
-layout(set = 0, binding = 4, rgba32f) uniform /*TODO*/ image2D connections1; // 1 1 0
+layout(set = 0, binding = 2, r32ui) uniform coherent uimage2D map;
 
-layout(set = 0, binding = 5) buffer Balls {
+layout(set = 0, binding = 3) buffer Balls {
     vec4 data[100]; // pos, number, 0 // Need a vec4 to get through to rust without issues
     // pos: The a center of the ball
     // number: How many pixels have gone into the average pos (Needed for averaging)
@@ -21,105 +22,66 @@ layout(set = 0, binding = 5) buffer Balls {
 const uint width = 640;
 const uint height = 480;
 
-// Nav constants
+// Avoidance constants: Going through bots low to the ground is just as
+//                      bad as going through tall bots.
 const float bot_avoidance_const = 100.0;
+
+// Bump Normalization constants: Taller objects have same area effect as 
+//                               shorter objects
 const int bot_norm_const = 20;
 const int terrain_norm_const = 10;
 
 
-int norm_img_store(ivec2 pos, float val, int norm_strength) {
-    // For now just a single point store function
-    // TODO: Normalize
-    imageStore(depth, pos, vec4(val));
-    return 0;
+int int_float_repr(float y, uint max) { 
+    return int(y * 4294967295.0 / float(max));
 }
+/// dump a mound of prespecified height and area effect at a position.
+/// Reasoning: This will essentially make traveling through that position
+/// suboptimal (how bad is proportional to the height). The area effect 
+/// will help ensure clearance.
+void bump_img_store(ivec2 pos, float val, int bump_size) {
+    // Sigmoid function with constants for clearance
+    // let k = calibration constant representing the amount of strong and soft clearance, the
+    //         soft: (-inf, point of inflection]  strong: [point of inflection, +inf)
+    //           1
+    // y = --------------
+    //     1 + e^(1.5x/k)
+    //
+    // select domain: x ∈ [-k, k]
+    // range: y ∈ (~0, ~2)
 
-/* // TODO: finish alg
-float dist (float encoded_pos, ivec2 other_pos) {
-    // TODO
-    return 0.0;
-}
-*/
-
-int connections_store(ivec2 pos) { /*
-    // TODO:
-    // Note: Pos storage considerations
-    // Note: How to make neighbor always exist
-    // Note: Does not account for edges yet.
-
-    // NEED AN RWLOCK
-    //  + Multiple reads one WRITE
-    //  + Capable of awaiting release
-    // TOTEST: coherent
-    // https://www.khronos.org/opengl/wiki/Image_Load_Store#Memory_qualifiers
-    // https://www.khronos.org/opengl/wiki/Memory_Model#Ensuring_visibility
-
-    float encoded_pos; // TODO: Encoding and decoding
-
-    // See shaders/parallel_connections_algorithm.txt
-
-    // Stage 1 v2: // Share dist
-    connections0_lock = lock connections0[]; // forces another node to wait for this node to finish storing before another node can take
-
-    vec4 c0s = vec4(position_encoded; 4);
-    imageStore(connections0_lock, pos, c0s);
-
-    release connections0_lock;
-
-    // Stage 2 v2:
-    connections1_lock = lock connections1[pos.1]; // forces wait for node to finish sharing data to connections 
-
-    // 1 0 0  // 3 # #  // # 0 1
-    // 1   0  // 2   #  // #   2
-    // 1 1 0  // 1 0 #  // # # 3
-
-    // dims: top left = origin // glsl also likes column major
-    // index in connections1 = oposite index in connections0 arr
-    vec4 c1s = vec4( 
-        dist(connections0[pos.x][pos.y+1].r, pos), 
-        dist(connections0[pos.x-1][pos.y+1].g, pos),
-        dist(connections0[pos.x-1][pos.y].b, pos),
-        dist(connections0[pos.x-1][pos.y-1].a, pos)
-    );
-    imageStore(connections1_lock, pos, c1s);
-
-    release connections1_lock;
-
-    // Stage 3 v2:
-    // No connections0 lock needed for anything but write access (no blocking)
-    connections0_lock = lock connections0[];
+    ivec2 origin = pos - bump_size;
     
-    vec4 c0s = vec4(
-        connections1[pos.x][pos.y-1].r, 
-        connections1[pos.x+1][pos.y-1].g,
-        connections1[pos.x+1][pos.y].b, 
-        connections1[pos.x+1][pos.y+1].a
-    );
-    imageStore(connections0_lock, pos, c0s);
-
-    release connections0_lock; 
-    
-    */ // TODO finish alg
-
-    return 0;
+    for (int x = 0; x < bump_size*2; x++) {
+        for (int y = 0; y < bump_size*2; y++) {
+            ivec2 loc = origin + ivec2(x, y); // location
+            // proximity (Probably some cheating that can be done here for speed)
+            float prox = sqrt(pow(pos.x - loc.x, 2) + pow(pos.y - loc.y, 2)); 
+            float y_add = (1.0 / exp(1.5 * prox / bump_size)) * val; // exp = natural exponentiation of param e^param
+            
+            imageAtomicAdd(map, loc, int_float_repr(y_add, height)); // TODO!!! Must use Atomic Add and integer image type.
+        }
+    }
 }
 
-int store_ball(int id, ivec2 val) {
+void store_ball(int id, ivec2 val) { 
     float term = out_balls.data[id].z;
     vec2 new_val = out_balls.data[id].xy * term + val;
     out_balls.data[id] = vec4(new_val / (term + 1), term + 1, 0);
-    return 0;
 }
 
 void main() {
     uvec2 img_pos = gl_GlobalInvocationID.xy;
-    vec3 depth_and_class_read = texture(depth_and_class, img_pos).xyz;
+    vec2 depth_read = texture(depth_samp, img_pos).xy;
+    vec2 class_read = texture(class_samp, img_pos).xy;
+    
+    int depth = int(depth_read.x) * 1; // TODO scale
 
-    int depth = int(depth_and_class_read.x); // TODO scale
-    int cls = int(depth_and_class_read.y);
-    int id = int(depth_and_class_read.z);
+    // Not real world pos so that it fits neatly in the Image2D
+    ivec3 imgwrld_pos = ivec3(img_pos, depth); 
 
-    vec3 real_pos = vec3(0, 0, 0);
+    int cls = int(class_read.x);
+    int id = int(class_read.y);
 
     // action_ty:
     // 0: follow terrain
@@ -133,18 +95,14 @@ void main() {
     }
 
     // For indexing it is best to store a birdseye view (xz)
-    ivec2 new_pos = ivec2(real_pos.x, real_pos.z);
+    ivec2 new_pos = imgwrld_pos.xz;
 
     if (action_ty == 0) { // Terrain
-        norm_img_store(new_pos, real_pos.y, terrain_norm_const);
-        connections_store(new_pos);
+        bump_img_store(new_pos, imgwrld_pos.y, terrain_norm_const);
     } else if (action_ty == 2) { // Ball
         // TODO: instance segmentation set position according to unique id
         store_ball(id, new_pos);
     } else { // Robot
-        // dump a mound of prespecified height at the position.
-        // Reasoning: This will essentially make traveling through that position suboptimal and can
-        // be done in a storage efficient manner. It will essentially automatically
-        norm_img_store(new_pos, bot_avoidance_const, bot_norm_const);
+        bump_img_store(new_pos, imgwrld_pos.y, bot_norm_const);
     }
 }
