@@ -23,6 +23,17 @@ Edgetpu: Google Coral USB (Testing on)
 # Dependencies
 Simply execute the `dependencies.sh` batch file
 
+Make sure to set
+```
+framebuffer_width=1080
+framebuffer_height=720
+hdmi_force_hotplug=1
+hdmi_group=1
+hdmi_mode=16
+hdmi_drive=2
+```
+in `/boot/config.txt`.
+
 # Wiring (Tested)
 USB 3.0 &nbsp; Coral TPU <br/>
 USB 3.0 &nbsp; Kinect OpenNI2 capable device

@@ -6,8 +6,8 @@
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-layout(set = 0, binding = 0) uniform sampler2D depth_samp; // (z, 0, 0, 0)
-layout(set = 0, binding = 1) uniform sampler2D class_samp; // (class, ID, 0, 0)
+layout(set = 0, binding = 0) uniform usampler2D depth_samp; // (z, 0, 0, 1)
+layout(set = 0, binding = 1) uniform usampler2D class_samp; // (class, ID, 0, 1)
 
 // Need a vec4 to get through to rust without issues
 layout(set = 0, binding = 2, r32ui) uniform coherent uimage2D map;
@@ -17,6 +17,8 @@ layout(set = 0, binding = 3) buffer Balls {
     // pos: The a center of the ball
     // number: How many pixels have gone into the average pos (Needed for averaging)
 } out_balls;
+
+layout(set = 0, binding = 4, r32ui) uniform coherent uimage2D dbg;
 
 // Image dims
 const uint width = 640;
@@ -31,35 +33,45 @@ const float bot_avoidance_const = 100.0;
 const int bot_norm_const = 20;
 const int terrain_norm_const = 10;
 
+const float bump_err = 0.1;
+
 
 int int_float_repr(float y, uint max) { 
-    return int(y * 4294967295.0 / float(max));
+    return int((y / float(max)) * 1483647.0);
 }
 /// dump a mound of prespecified height and area effect at a position.
 /// Reasoning: This will essentially make traveling through that position
 /// suboptimal (how bad is proportional to the height). The area effect 
 /// will help ensure clearance.
 void bump_img_store(ivec2 pos, float val, int bump_size) {
-    // Sigmoid function with constants for clearance
-    // let k = calibration constant representing the amount of strong and soft clearance, the
-    //         soft: (-inf, point of inflection]  strong: [point of inflection, +inf)
-    //           1
-    // y = --------------
-    //     1 + e^(1.5x/k)
+    // Sigmoid function with constants for clearance 
+    // s = size of bump = val to be stored
+    // L = length of bump = bump_size
+    // r = error: half the difference between the range and s
     //
-    // select domain: x ∈ [-k, k]
-    // range: y ∈ (~0, ~2)
+    //                 s
+    // y = ----------------------------
+    //     1 + ((s / r) - 1)^(2x/L - 1)
+    //
+    // select domain: x ∈ [0, L]
+    // range: y ∈ [r, s-r]
+    //
 
     ivec2 origin = pos - bump_size;
+
+    float C_1 = val / bump_err - 1.0;
+    float C_2 = 2.0 / float(bump_size);
     
     for (int x = 0; x < bump_size*2; x++) {
         for (int y = 0; y < bump_size*2; y++) {
             ivec2 loc = origin + ivec2(x, y); // location
-            // proximity (Probably some cheating that can be done here for speed)
-            float prox = sqrt(pow(pos.x - loc.x, 2) + pow(pos.y - loc.y, 2)); 
-            float y_add = (1.0 / exp(1.5 * prox / bump_size)) * val; // exp = natural exponentiation of param e^param
-            
-            imageAtomicAdd(map, loc, int_float_repr(y_add, height)); // TODO!!! Must use Atomic Add and integer image type.
+            if (loc.x > 0 && loc.y > 0 && loc.x < width - 1 && loc.y < height - 1) {
+                // proximity (Probably some cheating that can be done here for speed)
+                float prox = sqrt(float(pow(pos.x - loc.x, 2) + pow(pos.y - loc.y, 2))); 
+                float y_add = val / (1.0 + pow(C_1, C_2 * prox - 1.0));
+                
+                imageAtomicAdd(map, loc, int_float_repr(y_add, height));
+            }
         }
     }
 }
@@ -72,10 +84,14 @@ void store_ball(int id, ivec2 val) {
 
 void main() {
     uvec2 img_pos = gl_GlobalInvocationID.xy;
-    vec2 depth_read = texture(depth_samp, img_pos).xy;
-    vec2 class_read = texture(class_samp, img_pos).xy;
+    // Textures use normalized coordinates. 
+    // Thanks to RuaWhitepaw#1586 for getting me the memo.
+    vec2 img_pos_norm = vec2(0, 1) + vec2(img_pos) / vec2(width, -height);
+    uint depth_read = uint(texture(depth_samp, img_pos_norm).r) + texture(depth_samp, img_pos_norm).g + texture(depth_samp, img_pos_norm).b + texture(depth_samp, img_pos_norm).a;
+    uvec2 class_read = texture(class_samp, img_pos_norm).rg;
+    imageStore(dbg, ivec2(img_pos), uvec4(depth_read));
     
-    int depth = int(depth_read.x) * 1; // TODO scale
+    int depth = int(depth_read); // TODO scale
 
     // Not real world pos so that it fits neatly in the Image2D
     ivec3 imgwrld_pos = ivec3(img_pos, depth); 
@@ -88,14 +104,12 @@ void main() {
     // 1: avoid // Could differentiate between red and blue robots and alter mound
     // 2: goal (go to ball)
     int action_ty = cls;
-    if (action_ty != 0) {
-        if (action_ty != 1) {
-            action_ty -= 1;
-        }
+    if (action_ty > 1) {
+        action_ty = action_ty - 1;
     }
 
     // For indexing it is best to store a birdseye view (xz)
-    ivec2 new_pos = imgwrld_pos.xz;
+    ivec2 new_pos = ivec2(imgwrld_pos.x, imgwrld_pos.z);
 
     if (action_ty == 0) { // Terrain
         bump_img_store(new_pos, imgwrld_pos.y, terrain_norm_const);
@@ -103,6 +117,6 @@ void main() {
         // TODO: instance segmentation set position according to unique id
         store_ball(id, new_pos);
     } else { // Robot
-        bump_img_store(new_pos, imgwrld_pos.y, bot_norm_const);
+        bump_img_store(new_pos, bot_avoidance_const, bot_norm_const);
     }
 }

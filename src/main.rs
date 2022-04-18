@@ -91,7 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         //thread::sleep(heartbeat);
         // figure out scene
         scene::append_scene((point_cloud_queue.clone(), target_buffer_queue.clone(), &mut not_empty_rx), scene.clone()).await;
-
+        panic!("YAY");
         // build paths from what we know
         path::modify_path(path.clone(), target_queue.clone(), scene.clone()).await;
     }

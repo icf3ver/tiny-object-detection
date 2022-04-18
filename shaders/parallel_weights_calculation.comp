@@ -1,15 +1,15 @@
 #version 450
 
-layout(local_size_x = 640, local_size_y = 480, local_size_z = 1) in;
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 // Map is only for indexing. (Atomic ops can only be performed on r32ui or r32i)
-layout(set = 0, binding = 2, r32ui) uniform readonly uimage2D map;
+layout(set = 1, binding = 0, r32ui) uniform readonly uimage2D map;
 // Real Position
-layout(set = 0, binding = 3, rgba32f) uniform coherent image2D world; // .a stores nothing
+layout(set = 1, binding = 1, rgba32f) uniform coherent image2D world; // .a stores nothing
 
 // Weight of the connections. (Formatted for fast indexing)                  // 1 0 0
-layout(set = 0, binding = 6, rgba32f) uniform coherent image2D connections0; // 1   0
-layout(set = 0, binding = 7, rgba32f) uniform coherent image2D connections1; // 1 1 0
+layout(set = 1, binding = 2, rgba32f) uniform coherent image2D connections0; // 1   0
+layout(set = 1, binding = 3, rgba32f) uniform coherent image2D connections1; // 1 1 0
 
 // Image dims
 const uint width = 640;
@@ -21,14 +21,17 @@ const float x_fov = 1.51843644924; // 87 deg
 const float y_fov = 1.01229096616; // 58 deg
 
 float float_int_repr(uint y, uint max) { 
-    return float(y) * float(max) / 4294967295.0;
+    return (float(y) / 2147483647.0) * float(max);
 }
 
 // note vec2 not ivec2
 float pack(uint x, uint y) {
-    return float(x << 16 & y);
+    return float((x << 16) & y);
 }
 vec3 unpack(float encoded_pos){
+    if (encoded_pos == -1.0) {
+       return vec3(-1.0, -1.0, -1.0);
+    }
     uint x = uint(encoded_pos) >> 16;
     uint y = uint(encoded_pos) << 16 >> 16;
 
@@ -36,6 +39,9 @@ vec3 unpack(float encoded_pos){
 }
 
 float dist (vec3 pos, vec3 other_pos) {
+    if (other_pos == vec3(-1.0, -1.0, -1.0)) {
+        return -1.0;
+    }
     return sqrt(
         pow(pos.x - other_pos.x, 2) + 
         pow(pos.y - other_pos.y, 2) + 
@@ -47,23 +53,26 @@ void main() {
     ivec2 img_pos = ivec2(gl_GlobalInvocationID.xy);
     float depth = float_int_repr(imageLoad(map, img_pos).x, height);
 
+    bool nxmin = img_pos.x > 0;
+    bool nxmax = img_pos.x < width - 1;
+    bool nymin = img_pos.y > 0;
+    bool nymax = img_pos.y < height - 1;
+
     // real world pos
     vec3 imgwrld_pos = vec3(img_pos.x, depth, img_pos.y);
 
-    mat3 imProj = mat3(
-        1, 0, 0,
-        0, 1, 0,
-        0, 0, 1
-    );
+    // mat3 imProj = mat3(
+    //     1, 0, 0,
+    //     0, 1, 0,
+    //     0, 0, 1
+    // );
 
-    vec3 wrld_pos = imProj * imgwrld_pos;
+    vec3 wrld_pos = imgwrld_pos;
 
     imageStore(world, img_pos, vec4(wrld_pos, 0.0));
 
     // TODO:
     // Note: Pos storage considerations
-    // Note: How to make neighbor always exist
-    // Note: Does not account for edges yet.
 
     float encoded_pos = pack(img_pos.x, img_pos.y);
 
@@ -72,12 +81,18 @@ void main() {
     vec4 c0s = vec4(encoded_pos);
     imageStore(connections0, img_pos, c0s);
 
+    barrier();
+
     // Stage 2 v2:
-    vec4 buf = vec4(0.0, 0.0, 0.0, 0.0);
-    while (buf.r == 0.0) { buf.r = imageLoad(connections0, ivec2(img_pos.x, img_pos.y+1)).r; }
-    while (buf.g == 0.0) { buf.g = imageLoad(connections0, ivec2(img_pos.x-1, img_pos.y+1)).g; }
-    while (buf.b == 0.0) { buf.b = imageLoad(connections0, ivec2(img_pos.x-1, img_pos.y)).b; }
-    while (buf.a != 0.0) { buf.a = imageLoad(connections0, ivec2(img_pos.x-1, img_pos.y-1)).a; } // DC err
+    vec4 buf = vec4(-1.0, -1.0, -1.0, -1.0);
+    //while (buf.r == -1.0 && 
+    if (nymax)          { buf.r = imageLoad(connections0, ivec2(img_pos.x, img_pos.y+1)).r; }
+    //while (buf.g == -1.0 && 
+    if (nxmin && nymax) { buf.g = imageLoad(connections0, ivec2(img_pos.x-1, img_pos.y+1)).g; }
+    //while (buf.b == -1.0 && 
+    if (nxmin)          { buf.b = imageLoad(connections0, ivec2(img_pos.x-1, img_pos.y)).b; }
+    //while (buf.a == -1.0 && 
+    if (nxmin && nymin) { buf.a = imageLoad(connections0, ivec2(img_pos.x-1, img_pos.y-1)).a; }
     // forces this thread to weight for its neighbors
 
     // 1 0 0  // 3 # #  // # 0 1
@@ -86,7 +101,7 @@ void main() {
 
     // dims: top left = origin // glsl also likes column major
     // index in connections1 = oposite index in connections0 arr
-    vec4 c1s = vec4(
+    vec4 c1s = vec4( // Propagates -1.0 through
         dist(wrld_pos, unpack(buf.r)),
         dist(wrld_pos, unpack(buf.g)),
         dist(wrld_pos, unpack(buf.b)),
@@ -94,13 +109,18 @@ void main() {
     );
     imageStore(connections1, img_pos, c1s);
 
+    barrier();
+
     // Stage 3 v2:
     vec4 c0s_buf = vec4(-1.0, -1.0, -1.0, -1.0);
-    // TODO encoding function that stores with negative
-    while (c0s_buf.r <= 0.0) { c0s_buf.r = imageLoad(connections1, ivec2(img_pos.x, img_pos.y-1)).r; }
-    while (c0s_buf.g <= 0.0) { c0s_buf.g = imageLoad(connections1, ivec2(img_pos.x+1, img_pos.y-1)).g; }
-    while (c0s_buf.b <= 0.0) { c0s_buf.b = imageLoad(connections1, ivec2(img_pos.x+1, img_pos.y)).b; }
-    while (c0s_buf.a <= 0.0) { c0s_buf.a = imageLoad(connections1, ivec2(img_pos.x+1, img_pos.y+1)).a; }
+    //while (c0s_buf.r <= 0.0 &&
+    if (nymin)          { c0s_buf.r = imageLoad(connections1, ivec2(img_pos.x, img_pos.y-1)).r; }
+    //while (c0s_buf.g <= 0.0 &&
+    if (nxmax && nymin) { c0s_buf.g = imageLoad(connections1, ivec2(img_pos.x+1, img_pos.y-1)).g; }
+    //while (c0s_buf.b <= 0.0 && 
+    if (nxmax)          { c0s_buf.b = imageLoad(connections1, ivec2(img_pos.x+1, img_pos.y)).b; }
+    //while (c0s_buf.a <= 0.0 && 
+    if (nxmax && nymax) { c0s_buf.a = imageLoad(connections1, ivec2(img_pos.x+1, img_pos.y+1)).a; }
     // forces this thread to weight for its neighbors
     imageStore(connections0, img_pos, c0s_buf);
 }
