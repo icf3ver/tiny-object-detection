@@ -2,24 +2,28 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tokio::io::{AsyncWriteExt, AsyncReadExt};
-use tokio::time::Instant;
-use crate::scene::{Scene, Target};
+use std::time::{SystemTime, UNIX_EPOCH};
+use crate::scene::Scene;
+
+#[allow(unused_imports)] // TODO: Use TreeSets
 use std::collections::BTreeSet;
 
 pub(crate) struct Path {
-    pub(crate) created: Instant,
+    pub(crate) created: SystemTime,
     // pub(crate) modified: Instant,
     pub(crate) directions: Vec<(f32, f32)>,
 }
 impl Path {
     fn serialize(&self) -> Vec<u8> {
-        self.directions.iter().map(|(m, r)| [m.to_be_bytes(), r.to_be_bytes()].concat()).flatten().collect()
+        let mut out = self.created.duration_since(UNIX_EPOCH).expect("Incorrect System Time").as_secs().to_be_bytes().to_vec();
+        out.append(&mut self.directions.iter().map(|(m, r)| [m.to_be_bytes(), r.to_be_bytes()].concat()).flatten().collect());
+        out
     }
 }
 
 /// Modifies the Path with the new scene information
-pub(crate) async fn modify_path(arc_path: Arc<Mutex<Path>>, target_queue: Arc<Mutex<Vec<Target>>>, scene: Arc<Mutex<Scene>>) {
-    let mut scene_lock = scene.lock().await;
+pub(crate) async fn modify_path(arc_path: Arc<Mutex<Path>>, scene: Arc<Mutex<Scene>>) {
+    let scene_lock = scene.lock().await; // Not released until end
 
     let mut set = Vec::new(); // TODO use TreeSet (first & last requires nightly)
     let mut path: [usize; 224 * 224] = [usize::MAX - 1; 224 * 224]; // MAX-1 = undefined MAX-2 = target (I do not need u32 size)
@@ -44,7 +48,7 @@ pub(crate) async fn modify_path(arc_path: Arc<Mutex<Path>>, target_queue: Arc<Mu
         //ball_checked[dest_node] = 17;
     }
     
-    let mut min_neighbor_cost = f32::MAX;
+    let mut min_neighbor_cost;
     while let Some(node) = set.pop() {
         //best_ball = ball[node]; // ball 0 has 100% been checked
         min_neighbor_cost = cost[node];
@@ -86,10 +90,10 @@ pub(crate) async fn modify_path(arc_path: Arc<Mutex<Path>>, target_queue: Arc<Mu
         }
     }
 
-    const start_node: usize = 0; // TODO calibrate
+    const START_NODE: usize = 640 * 480 - 240;
     let mut new_path = Vec::new();
-    let mut last_node = start_node;
-    let mut node = start_node;
+    let mut last_node;
+    let mut node = START_NODE;
     let mut rotation = 0.0;
     while node != usize::MAX - 2 {
         let magnitude = cost[node] - cost[path[node]];
@@ -110,10 +114,19 @@ pub(crate) async fn modify_path(arc_path: Arc<Mutex<Path>>, target_queue: Arc<Mu
 
     let mut path_lock = arc_path.lock().await; 
     *path_lock = Path {
-        created: Instant::now(), 
+        created: SystemTime::now(), 
         directions: new_path
     }
 }
+
+#[derive(Debug)]
+struct RequestError<'a>(&'a str);
+impl<'a> std::fmt::Display for RequestError<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "RequestError(\"{}\")", self.0)
+    }
+}
+impl<'a> std::error::Error for RequestError<'a> {}
 
 /// Handles Path Requests from Rio
 pub(crate) async fn handle_path_request(path: Arc<Mutex<Path>>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -140,25 +153,25 @@ pub(crate) async fn handle_path_request(path: Arc<Mutex<Path>>) -> Result<(), Bo
                     b"NewPath" => {
                         let mut lock = path.lock().await;
                         *lock = {
-                            let created = Instant::now();
+                            let created = SystemTime::now();
                             Path {
                                 created,
                                 // modified: created,
                                 directions: Vec::new(),
                             }
                         };
-                        socket.write(b"OK").await;
+                        if let Err(e) = socket.write(b"OK").await {
+                            return eprintln!("{}", RequestError(format!("failed to write to socket; err = {:?}", e).as_str()));
+                        }
                     },
                     b"GetPath" => {
                         let path_lock = path.lock().await;
                         if let Err(e) = socket.write_all(&path_lock.serialize()).await {
-                            eprintln!("failed to write to socket; err = {:?}", e);
-                            return;
+                            return eprintln!("{}", RequestError(format!("failed to write to socket; err = {:?}", e).as_str()));
                         }
                     },
                     request => {
-                        eprintln!("formatting err {:?} is not a request", std::str::from_utf8(request));
-                        return;
+                        return eprintln!("{}", RequestError(format!("formatting err {:?} is not a request", std::str::from_utf8(request)).as_str()));
                     }
                 }
             }

@@ -1,8 +1,7 @@
 #version 450
-// GLSL Point Cloud Triangulation
-
-// Issue should wait for all other points to be finished
-// Borders
+//! GLSL Point Cloud Preparation
+//! TODO Debug depth_samp input issues
+//! TODO Merge with pt_cloud_weights shader
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -10,7 +9,9 @@ layout(set = 0, binding = 0) uniform usampler2D depth_samp; // (z, 0, 0, 1)
 layout(set = 0, binding = 1) uniform usampler2D class_samp; // (class, ID, 0, 1)
 
 // Need a vec4 to get through to rust without issues
-layout(set = 0, binding = 2, r32ui) uniform coherent uimage2D map;
+layout(set = 0, binding = 2, r32ui) uniform uimage2D map;
+
+// layout(set = 0, binding = 4, r32ui) uniform uimage2D dbg;
 
 layout(set = 0, binding = 3) buffer Balls {
     vec4 data[100]; // pos, number, 0 // Need a vec4 to get through to rust without issues
@@ -18,11 +19,13 @@ layout(set = 0, binding = 3) buffer Balls {
     // number: How many pixels have gone into the average pos (Needed for averaging)
 } out_balls;
 
-layout(set = 0, binding = 4, r32ui) uniform coherent uimage2D dbg;
-
 // Image dims
 const uint width = 640;
 const uint height = 480;
+const float max_depth_in = 4000.0;
+
+const float y_fov = 1.01229096616; // 58 deg
+const float x_fov = 1.51843644924; // 87 deg 
 
 // Avoidance constants: Going through bots low to the ground is just as
 //                      bad as going through tall bots.
@@ -35,10 +38,6 @@ const int terrain_norm_const = 10;
 
 const float bump_err = 0.1;
 
-
-int int_float_repr(float y, uint max) { 
-    return int((y / float(max)) * 1483647.0);
-}
 /// dump a mound of prespecified height and area effect at a position.
 /// Reasoning: This will essentially make traveling through that position
 /// suboptimal (how bad is proportional to the height). The area effect 
@@ -70,7 +69,7 @@ void bump_img_store(ivec2 pos, float val, int bump_size) {
                 float prox = sqrt(float(pow(pos.x - loc.x, 2) + pow(pos.y - loc.y, 2))); 
                 float y_add = val / (1.0 + pow(C_1, C_2 * prox - 1.0));
                 
-                imageAtomicAdd(map, loc, int_float_repr(y_add, height));
+                imageAtomicMax(map, loc, uint(y_add));
             }
         }
     }
@@ -86,15 +85,18 @@ void main() {
     uvec2 img_pos = gl_GlobalInvocationID.xy;
     // Textures use normalized coordinates. 
     // Thanks to RuaWhitepaw#1586 for getting me the memo.
-    vec2 img_pos_norm = vec2(0, 1) + vec2(img_pos) / vec2(width, -height);
-    uint depth_read = uint(texture(depth_samp, img_pos_norm).r) + texture(depth_samp, img_pos_norm).g + texture(depth_samp, img_pos_norm).b + texture(depth_samp, img_pos_norm).a;
-    uvec2 class_read = texture(class_samp, img_pos_norm).rg;
-    imageStore(dbg, ivec2(img_pos), uvec4(depth_read));
+    vec2 img_pos_norm = vec2(img_pos) / vec2(width, height);
+    uint depth_read = texture(depth_samp, img_pos_norm).x;
+    // imageStore(dbg, ivec2(img_pos), uvec4(depth_read));
+    uvec2 class_read = texture(class_samp, img_pos_norm).xy;
     
-    int depth = int(depth_read); // TODO scale
+    float depth = float(depth_read) 
+        * cos(atan(tan(y_fov / 2.0) * float(img_pos.y) * 2.0 / float(height)))
+        * cos(atan(tan(x_fov / 2.0) * float(img_pos.x) * 2.0 / float(width)));
 
     // Not real world pos so that it fits neatly in the Image2D
-    ivec3 imgwrld_pos = ivec3(img_pos, depth); 
+    int depth_img_coord = int(float(height) * depth / max_depth_in);
+    ivec3 imgwrld_pos = ivec3(img_pos, depth_img_coord);
 
     int cls = int(class_read.x);
     int id = int(class_read.y);
@@ -109,7 +111,7 @@ void main() {
     }
 
     // For indexing it is best to store a birdseye view (xz)
-    ivec2 new_pos = ivec2(imgwrld_pos.x, imgwrld_pos.z);
+    ivec2 new_pos = ivec2(imgwrld_pos.x, height - imgwrld_pos.z); // z=0 is at the bottom of the image
 
     if (action_ty == 0) { // Terrain
         bump_img_store(new_pos, imgwrld_pos.y, terrain_norm_const);

@@ -1,0 +1,20 @@
+#version 450
+// GLSL Tool for debugging non functional GLSL
+//
+// Problem ended up being a failure to wait for futures.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 2, binding = 0) uniform usampler2D depth_samp; // (z, 0, 0, 1)
+layout(set = 2, binding = 1, r32ui) uniform uimage2D dbg;
+
+// Image dims
+const uint width = 640;
+const uint height = 480;
+
+void main() {
+    uvec2 img_pos = gl_GlobalInvocationID.xy;
+    vec2 img_pos_norm = vec2(img_pos) / vec2(width, height);
+    uint depth_read = texture(depth_samp, img_pos_norm).x;
+    imageStore(dbg, ivec2(img_pos), uvec4(depth_read));
+}

@@ -1,28 +1,25 @@
 #version 450
+//! GLSL Point Cloud Parallel Indexible Weights Computation
+//! TODO Merge with pt_cloud shader
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 // Map is only for indexing. (Atomic ops can only be performed on r32ui or r32i)
-layout(set = 1, binding = 0, r32ui) uniform readonly uimage2D map;
+layout(set = 1, binding = 0, r32ui) uniform uimage2D map;
 // Real Position
-layout(set = 1, binding = 1, rgba32f) uniform coherent image2D world; // .a stores nothing
+layout(set = 1, binding = 1, rgba32f) uniform image2D world; // .a stores nothing
 
-// Weight of the connections. (Formatted for fast indexing)                  // 1 0 0
-layout(set = 1, binding = 2, rgba32f) uniform coherent image2D connections0; // 1   0
-layout(set = 1, binding = 3, rgba32f) uniform coherent image2D connections1; // 1 1 0
+// Weight of the connections. (Formatted for fast indexing)         // 1 0 0
+layout(set = 1, binding = 2, rgba32f) uniform image2D connections0; // 1   0
+layout(set = 1, binding = 3, rgba32f) uniform image2D connections1; // 1 1 0
 
 // Image dims
 const uint width = 640;
 const uint height = 480;
-const uint depth_range = 10000; // realsense uses mm (max is stated to be 10m)
 
 // ±3 deg
 const float x_fov = 1.51843644924; // 87 deg 
 const float y_fov = 1.01229096616; // 58 deg
-
-float float_int_repr(uint y, uint max) { 
-    return (float(y) / 2147483647.0) * float(max);
-}
 
 // note vec2 not ivec2
 float pack(uint x, uint y) {
@@ -51,7 +48,7 @@ float dist (vec3 pos, vec3 other_pos) {
 
 void main() {
     ivec2 img_pos = ivec2(gl_GlobalInvocationID.xy);
-    float depth = float_int_repr(imageLoad(map, img_pos).x, height);
+    float depth = float(imageLoad(map, img_pos).x);
 
     bool nxmin = img_pos.x > 0;
     bool nxmax = img_pos.x < width - 1;
